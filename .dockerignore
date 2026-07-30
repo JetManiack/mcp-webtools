@@ -1,0 +1,10 @@
+.git
+.idea
+.claude
+.superpowers
+.remember
+docs
+data
+bin
+internal/frontend/static/js
+internal/frontend/static/fonts
