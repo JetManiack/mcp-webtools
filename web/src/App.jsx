@@ -1,11 +1,12 @@
-import { useHashRoute } from "./router.js";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import Shell from "./components/Shell.jsx";
+import History from "./pages/History.jsx";
+import Actors from "./pages/Actors.jsx";
+import CallDetail from "./components/CallDetail.jsx";
 import { useCurrentUser } from "./currentUser.js";
-import Agents from "./Agents.jsx";
-import HistoryList from "./HistoryList.jsx";
-import CallDetail from "./CallDetail.jsx";
+import { domainPages } from "./pages/domain/index.js";
 
 export default function App() {
-  const route = useHashRoute();
   const { user, error } = useCurrentUser();
 
   if (error) {
@@ -21,20 +22,21 @@ export default function App() {
     return <div className="empty-state">Loading…</div>;
   }
 
-  if (route.path === "/agents") {
-    // Viewers can't manage agents, and the tab isn't shown to them — a
-    // hand-typed #/agents falls back to history rather than rendering a
-    // screen whose every request would 403.
-    if (user.role !== "admin") {
-      return <HistoryList role={user.role} query={route.query} />;
-    }
-    return <Agents role={user.role} />;
-  }
-
-  const callMatch = route.path.match(/^\/history\/(.+)$/);
-  if (callMatch) {
-    return <CallDetail callId={callMatch[1]} role={user.role} />;
-  }
-
-  return <HistoryList role={user.role} query={route.query} />;
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route element={<Shell role={user.role} pages={domainPages} />}>
+          <Route path="/tool-calls" element={<History role={user.role} />} />
+          <Route path="/tool-calls/:id" element={<CallDetail role={user.role} />} />
+          {user.role === "admin" && (
+            <Route path="/actors" element={<Actors role={user.role} />} />
+          )}
+          {domainPages.map((p) => (
+            <Route key={p.path} path={p.path} element={<p.component role={user.role} />} />
+          ))}
+          <Route path="*" element={<Navigate to="/tool-calls" replace />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  );
 }

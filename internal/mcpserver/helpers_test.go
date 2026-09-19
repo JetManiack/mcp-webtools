@@ -6,7 +6,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
+	"github.com/JetManiack/mcp-webtools/internal/auth"
+	"github.com/JetManiack/mcp-webtools/internal/storage"
 )
 
 // openTestDB gives each test its own migrated SQLite database. The Postgres
@@ -34,9 +35,9 @@ func mustAgent(t *testing.T, db *gorm.DB, name string) *storage.Actor {
 func mustAgentWithToken(t *testing.T, db *gorm.DB, name string) (*storage.Actor, string) {
 	t.Helper()
 	agent := mustAgent(t, db, name)
-	token, err := storage.IssueAgentToken(db, agent.ID)
+	token, err := auth.Issue(db, agent.ID, "")
 	if err != nil {
-		t.Fatalf("IssueAgentToken: %v", err)
+		t.Fatalf("auth.Issue: %v", err)
 	}
 	return agent, token
 }

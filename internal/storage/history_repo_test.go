@@ -20,20 +20,20 @@ func mustAgent(t *testing.T, db *gorm.DB, name string) *Actor {
 
 // recordCall inserts one history row with an explicit timestamp, so ordering
 // and paging can be asserted without depending on how fast the test runs.
-func recordCall(t *testing.T, db *gorm.DB, actorID, tool string, status ToolCallStatus, at time.Time) *ToolCall {
+func recordCall(t *testing.T, db *gorm.DB, actorID, tool string, isError bool, at time.Time) *ToolCall {
 	t.Helper()
 	call := &ToolCall{
 		ActorID:   actorID,
 		Tool:      tool,
-		Args:      fmt.Sprintf(`{"url":"https://example.com/%d"}`, at.UnixNano()),
-		Status:    status,
-		CreatedAt: at,
+		InputJSON: fmt.Sprintf(`{"url":"https://example.com/%d"}`, at.UnixNano()),
+		IsError:   isError,
+		CalledAt:  at,
 	}
-	if status == ToolCallStatusError {
-		call.ErrorMessage = "boom"
+	if isError {
+		call.OutputJSON = `{"error":"boom"}`
 	} else {
-		call.ResponsePreview = `{"content":"hi"}`
-		call.ResponseBytes = 16
+		call.OutputJSON = `{"content":"hi"}`
+		call.OutputSize = 16
 	}
 	if err := RecordToolCall(db, call); err != nil {
 		t.Fatalf("RecordToolCall: %v", err)
@@ -45,15 +45,15 @@ func TestRecordToolCallFillsIDAndTimestamp(t *testing.T) {
 	db := openTestDB(t)
 	agent := mustAgent(t, db, "scraper-1")
 
-	call := &ToolCall{ActorID: agent.ID, Tool: "fetch", Args: "{}", Status: ToolCallStatusOK}
+	call := &ToolCall{ActorID: agent.ID, Tool: "fetch", InputJSON: "{}"}
 	if err := RecordToolCall(db, call); err != nil {
 		t.Fatalf("RecordToolCall: %v", err)
 	}
 	if call.ID == "" {
 		t.Error("ID was not filled in")
 	}
-	if call.CreatedAt.IsZero() {
-		t.Error("CreatedAt was not filled in")
+	if call.CalledAt.IsZero() {
+		t.Error("CalledAt was not filled in")
 	}
 }
 
@@ -62,9 +62,9 @@ func TestListToolCallsNewestFirst(t *testing.T) {
 	agent := mustAgent(t, db, "scraper-1")
 	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Millisecond)
 
-	oldest := recordCall(t, db, agent.ID, "fetch", ToolCallStatusOK, base)
-	middle := recordCall(t, db, agent.ID, "search", ToolCallStatusOK, base.Add(time.Minute))
-	newest := recordCall(t, db, agent.ID, "fetch", ToolCallStatusError, base.Add(2*time.Minute))
+	oldest := recordCall(t, db, agent.ID, "fetch", false, base)
+	middle := recordCall(t, db, agent.ID, "search", false, base.Add(time.Minute))
+	newest := recordCall(t, db, agent.ID, "fetch", true, base.Add(2*time.Minute))
 
 	calls, next, err := ListToolCalls(db, HistoryFilter{})
 	if err != nil {
@@ -90,9 +90,12 @@ func TestListToolCallsFilters(t *testing.T) {
 	two := mustAgent(t, db, "scraper-2")
 	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Millisecond)
 
-	recordCall(t, db, one.ID, "fetch", ToolCallStatusOK, base)
-	recordCall(t, db, one.ID, "search", ToolCallStatusError, base.Add(time.Minute))
-	recordCall(t, db, two.ID, "fetch", ToolCallStatusError, base.Add(2*time.Minute))
+	recordCall(t, db, one.ID, "fetch", false, base)
+	recordCall(t, db, one.ID, "search", true, base.Add(time.Minute))
+	recordCall(t, db, two.ID, "fetch", true, base.Add(2*time.Minute))
+
+	trueVal := true
+	falseVal := false
 
 	tests := []struct {
 		name   string
@@ -102,10 +105,11 @@ func TestListToolCallsFilters(t *testing.T) {
 		{name: "no filter", filter: HistoryFilter{}, want: 3},
 		{name: "by actor", filter: HistoryFilter{ActorID: one.ID}, want: 2},
 		{name: "by tool", filter: HistoryFilter{Tool: "fetch"}, want: 2},
-		{name: "by status", filter: HistoryFilter{Status: string(ToolCallStatusError)}, want: 2},
-		{name: "combined", filter: HistoryFilter{Tool: "fetch", Status: string(ToolCallStatusError)}, want: 1},
+		{name: "by status", filter: HistoryFilter{IsError: &trueVal}, want: 2},
+		{name: "combined", filter: HistoryFilter{Tool: "fetch", IsError: &trueVal}, want: 1},
 		{name: "actor and tool", filter: HistoryFilter{ActorID: one.ID, Tool: "search"}, want: 1},
 		{name: "no matches", filter: HistoryFilter{Tool: "nonexistent"}, want: 0},
+		{name: "not error", filter: HistoryFilter{IsError: &falseVal}, want: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -129,7 +133,7 @@ func TestListToolCallsPagesWithoutGapsOrRepeats(t *testing.T) {
 
 	const total = 25
 	for i := range total {
-		recordCall(t, db, agent.ID, "fetch", ToolCallStatusOK, base.Add(time.Duration(i)*time.Second))
+		recordCall(t, db, agent.ID, "fetch", false, base.Add(time.Duration(i)*time.Second))
 	}
 
 	seen := make(map[string]int)
@@ -173,7 +177,7 @@ func TestListToolCallsPagesRowsSharingATimestamp(t *testing.T) {
 
 	const total = 6
 	for range total {
-		recordCall(t, db, agent.ID, "fetch", ToolCallStatusOK, sameInstant)
+		recordCall(t, db, agent.ID, "fetch", false, sameInstant)
 	}
 
 	seen := make(map[string]bool)
@@ -207,7 +211,7 @@ func TestListToolCallsLimitBounds(t *testing.T) {
 	agent := mustAgent(t, db, "scraper-1")
 	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Millisecond)
 	for i := range 5 {
-		recordCall(t, db, agent.ID, "fetch", ToolCallStatusOK, base.Add(time.Duration(i)*time.Second))
+		recordCall(t, db, agent.ID, "fetch", false, base.Add(time.Duration(i)*time.Second))
 	}
 
 	for _, limit := range []int{0, -1, MaxHistoryPageSize + 1} {
@@ -235,7 +239,7 @@ func TestListToolCallsUnknownCursor(t *testing.T) {
 func TestGetToolCall(t *testing.T) {
 	db := openTestDB(t)
 	agent := mustAgent(t, db, "scraper-1")
-	call := recordCall(t, db, agent.ID, "fetch", ToolCallStatusOK, time.Now().UTC())
+	call := recordCall(t, db, agent.ID, "fetch", false, time.Now().UTC())
 
 	got, err := GetToolCall(db, call.ID)
 	if err != nil {
@@ -255,9 +259,9 @@ func TestDistinctTools(t *testing.T) {
 	agent := mustAgent(t, db, "scraper-1")
 	base := time.Now().Add(-time.Hour).UTC()
 
-	recordCall(t, db, agent.ID, "search", ToolCallStatusOK, base)
-	recordCall(t, db, agent.ID, "fetch", ToolCallStatusOK, base.Add(time.Second))
-	recordCall(t, db, agent.ID, "fetch", ToolCallStatusError, base.Add(2*time.Second))
+	recordCall(t, db, agent.ID, "search", false, base)
+	recordCall(t, db, agent.ID, "fetch", false, base.Add(time.Second))
+	recordCall(t, db, agent.ID, "fetch", true, base.Add(2*time.Second))
 
 	tools, err := DistinctTools(db)
 	if err != nil {
@@ -276,8 +280,8 @@ func TestPruneToolCalls(t *testing.T) {
 	agent := mustAgent(t, db, "scraper-1")
 	now := time.Now().UTC()
 
-	old := recordCall(t, db, agent.ID, "fetch", ToolCallStatusOK, now.Add(-48*time.Hour))
-	recent := recordCall(t, db, agent.ID, "fetch", ToolCallStatusOK, now.Add(-time.Minute))
+	old := recordCall(t, db, agent.ID, "fetch", false, now.Add(-48*time.Hour))
+	recent := recordCall(t, db, agent.ID, "fetch", false, now.Add(-time.Minute))
 
 	deleted, err := PruneToolCalls(db, 24*time.Hour)
 	if err != nil {
@@ -300,7 +304,7 @@ func TestPruneToolCalls(t *testing.T) {
 func TestPruneToolCallsWithoutRetentionDeletesNothing(t *testing.T) {
 	db := openTestDB(t)
 	agent := mustAgent(t, db, "scraper-1")
-	recordCall(t, db, agent.ID, "fetch", ToolCallStatusOK, time.Now().Add(-10*365*24*time.Hour).UTC())
+	recordCall(t, db, agent.ID, "fetch", false, time.Now().Add(-10*365*24*time.Hour).UTC())
 
 	for _, retention := range []time.Duration{0, -time.Hour} {
 		deleted, err := PruneToolCalls(db, retention)
@@ -329,14 +333,13 @@ func TestRecordToolCallStoresEscapedBinaryPayload(t *testing.T) {
 	agent := mustAgent(t, db, "scraper-1")
 
 	call := &ToolCall{
-		ActorID: agent.ID,
-		Tool:    "fetch",
-		Args:    `{"url":"https://example.com/binary"}`,
-		Status:  ToolCallStatusOK,
+		ActorID:   agent.ID,
+		Tool:      "fetch",
+		InputJSON: `{"url":"https://example.com/binary"}`,
 		// A NUL escaped the way encoding/json escapes it (six ASCII characters,
 		// not a raw byte), plus U+FFFD standing in for an invalid byte.
-		ResponsePreview: `{"content":"\u0000 � binary-ish"}`,
-		ResponseBytes:   42,
+		OutputJSON: `{"content":"\u0000 � binary-ish"}`,
+		OutputSize: 42,
 	}
 	if err := RecordToolCall(db, call); err != nil {
 		t.Fatalf("RecordToolCall: %v", err)
@@ -346,7 +349,7 @@ func TestRecordToolCallStoresEscapedBinaryPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetToolCall: %v", err)
 	}
-	if got.ResponsePreview != call.ResponsePreview {
-		t.Errorf("ResponsePreview = %q, want %q", got.ResponsePreview, call.ResponsePreview)
+	if got.OutputJSON != call.OutputJSON {
+		t.Errorf("OutputJSON = %q, want %q", got.OutputJSON, call.OutputJSON)
 	}
 }

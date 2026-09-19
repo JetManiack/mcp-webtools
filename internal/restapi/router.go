@@ -6,7 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
-	"github.com/JetManiack/go-ai-webtools/internal/humanauth"
+	"github.com/JetManiack/mcp-webtools/internal/humanauth"
 )
 
 // NewHandler builds the full REST API handler, mounted with no path prefix
@@ -17,21 +17,22 @@ func NewHandler(db *gorm.DB, provider humanauth.Provider) http.Handler {
 	r := chi.NewRouter()
 	r.Use(humanauth.RequireHumanAuth(db, provider))
 
-	r.Route("/history", func(r chi.Router) {
+	r.Route("/tool-calls", func(r chi.Router) {
 		r.Get("/", listHistoryHandler(db))
 		r.Get("/tools", listHistoryToolsHandler(db))
 		r.Get("/{id}", getHistoryEntryHandler(db))
 	})
 
-	r.Route("/agents", func(r chi.Router) {
+	r.Route("/actors", func(r chi.Router) {
 		r.Use(humanauth.RequireAdmin)
 		r.Get("/", listAgentsHandler(db))
 		r.Post("/", createAgentHandler(db))
 		r.Delete("/{id}", deleteAgentHandler(db))
-		r.Get("/{id}/tokens", listAgentTokensHandler(db))
-		r.Post("/{id}/tokens", issueTokenHandler(db))
-		r.Delete("/{id}/tokens/{tokenID}", revokeTokenHandler(db))
+		r.Get("/{id}/credentials", listAgentTokensHandler(db))
+		r.Post("/{id}/credentials", issueTokenHandler(db))
 	})
+
+	r.With(humanauth.RequireAdmin).Delete("/credentials/{id}", revokeTokenHandler(db))
 
 	r.Get("/me", meHandler())
 

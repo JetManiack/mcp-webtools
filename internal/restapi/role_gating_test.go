@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
+	"github.com/JetManiack/mcp-webtools/internal/storage"
 )
 
 // A viewer can read history and nothing else. Agent management is where tokens
@@ -22,12 +22,12 @@ func TestViewerCannotManageAgents(t *testing.T) {
 		path   string
 		body   string
 	}{
-		{name: "list agents", method: http.MethodGet, path: "/api/agents"},
-		{name: "create agent", method: http.MethodPost, path: "/api/agents", body: `{"display_name":"nope"}`},
-		{name: "delete agent", method: http.MethodDelete, path: "/api/agents/" + agent.ID},
-		{name: "list tokens", method: http.MethodGet, path: "/api/agents/" + agent.ID + "/tokens"},
-		{name: "issue token", method: http.MethodPost, path: "/api/agents/" + agent.ID + "/tokens"},
-		{name: "revoke token", method: http.MethodDelete, path: "/api/agents/" + agent.ID + "/tokens/whatever"},
+		{name: "list agents", method: http.MethodGet, path: "/api/actors"},
+		{name: "create agent", method: http.MethodPost, path: "/api/actors", body: `{"display_name":"nope"}`},
+		{name: "delete agent", method: http.MethodDelete, path: "/api/actors/" + agent.ID},
+		{name: "list tokens", method: http.MethodGet, path: "/api/actors/" + agent.ID + "/credentials"},
+		{name: "issue token", method: http.MethodPost, path: "/api/actors/" + agent.ID + "/credentials"},
+		{name: "revoke token", method: http.MethodDelete, path: "/api/credentials/whatever"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -51,10 +51,10 @@ func TestViewerCannotManageAgents(t *testing.T) {
 func TestViewerCanReadHistory(t *testing.T) {
 	db := openTestDB(t)
 	agent := mustAgent(t, db, "scraper-1")
-	call := recordCall(t, db, agent.ID, "fetch", storage.ToolCallStatusOK, time.Now().UTC())
+	call := recordCall(t, db, agent.ID, "fetch", false, time.Now().UTC())
 	server := newTestAPI(t, db, providerWithRole("viewer"))
 
-	for _, path := range []string{"/api/history", "/api/history/tools", "/api/history/" + call.ID, "/api/me"} {
+	for _, path := range []string{"/api/tool-calls", "/api/tool-calls/tools", "/api/tool-calls/" + call.ID, "/api/me"} {
 		resp := do(t, server, http.MethodGet, path, "")
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET %s: status = %d, want 200", path, resp.StatusCode)
@@ -66,7 +66,7 @@ func TestAdminCanManageAgents(t *testing.T) {
 	db := openTestDB(t)
 	server := newTestAPI(t, db, providerWithRole("admin"))
 
-	resp := do(t, server, http.MethodGet, "/api/agents", "")
+	resp := do(t, server, http.MethodGet, "/api/actors", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", resp.StatusCode)
 	}
@@ -78,7 +78,7 @@ func TestUnknownRoleIsNotAdmin(t *testing.T) {
 	db := openTestDB(t)
 	server := newTestAPI(t, db, providerWithRole("auditor"))
 
-	resp := do(t, server, http.MethodGet, "/api/agents", "")
+	resp := do(t, server, http.MethodGet, "/api/actors", "")
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("status = %d, want 403", resp.StatusCode)
 	}

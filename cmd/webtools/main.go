@@ -14,17 +14,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/urfave/cli/v3"
 	"gorm.io/gorm"
 
-	"github.com/JetManiack/go-ai-webtools/internal/frontend"
-	"github.com/JetManiack/go-ai-webtools/internal/health"
-	"github.com/JetManiack/go-ai-webtools/internal/humanauth"
-	"github.com/JetManiack/go-ai-webtools/internal/mcpserver"
-	"github.com/JetManiack/go-ai-webtools/internal/restapi"
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
-	"github.com/JetManiack/go-ai-webtools/internal/tools/fetch"
-	"github.com/JetManiack/go-ai-webtools/internal/tools/search"
+	"github.com/JetManiack/mcp-webtools/internal/frontend"
+	"github.com/JetManiack/mcp-webtools/internal/health"
+	"github.com/JetManiack/mcp-webtools/internal/humanauth"
+	"github.com/JetManiack/mcp-webtools/internal/mcpserver"
+	"github.com/JetManiack/mcp-webtools/internal/restapi"
+	"github.com/JetManiack/mcp-webtools/internal/storage"
+	"github.com/JetManiack/mcp-webtools/internal/tools/fetch"
+	"github.com/JetManiack/mcp-webtools/internal/tools/search"
 )
 
 // version is stamped at build time by the Makefile (-X main.version=...).
@@ -67,8 +68,19 @@ func newRootCommand() *cli.Command {
 			&cli.IntFlag{
 				Name:    "fetch-max-bytes",
 				Value:   fetch.DefaultMaxBytes,
-				Usage:   "maximum response body the fetch tool returns; longer bodies are truncated",
+				Usage:   "page size of the body the fetch tool returns; longer bodies are truncated to a page and the agent retrieves the rest via the offset field",
 				Sources: cli.EnvVars("FETCH_MAX_BYTES"),
+			},
+			&cli.IntFlag{
+				Name:    "fetch-cache-max-bytes",
+				Value:   fetch.DefaultCacheMaxBytes,
+				Usage:   "in-memory byte budget of the fetch tool's snapshot and results caches that serve continuation pages and repeated fetches without re-fetching the origin (entries evict least-recently-used)",
+				Sources: cli.EnvVars("FETCH_CACHE_MAX_BYTES"),
+			},
+			&cli.DurationFlag{
+				Name:  "cache-ttl",
+				Value: 5 * time.Minute,
+				Usage: "how long a completed fetch page, document snapshot, or search result stays cached before being re-fetched from the origin (e.g. 5m); a non-positive value uses the default", Sources: cli.EnvVars("CACHE_TTL"),
 			},
 			&cli.DurationFlag{
 				Name:    "search-timeout",
@@ -196,25 +208,39 @@ func buildAppHandler(ctx context.Context, cmd *cli.Command, db *gorm.DB) (http.H
 		OIDCReady:       true,
 	}
 
-	mcpDeps := mcpserver.Deps{
-		DB:           db,
-		Fetcher:      fetch.New(cmd.Duration("fetch-timeout"), int64(cmd.Int("fetch-max-bytes"))),
-		Searcher:     search.New(cmd.String("searxng-url"), cmd.Duration("search-timeout")),
-		PreviewBytes: cmd.Int("history-preview-bytes"),
-		Version:      version,
-	}
+	// One TTL knob covers every result cache the tools keep: a completed
+	// request (a fetch page, a document snapshot, a search) that is still
+	// cached is served from memory, so an identical repeat within the TTL
+	// never re-hits the origin or the SearXNG instance.
+	cacheTTL := cmd.Duration("cache-ttl")
+	fetcher := fetch.New(
+		cmd.Duration("fetch-timeout"),
+		int64(cmd.Int("fetch-max-bytes")),
+		int64(cmd.Int("fetch-cache-max-bytes")),
+		cacheTTL,
+	)
+	searcher := search.New(
+		cmd.String("searxng-url"),
+		cmd.Duration("search-timeout"),
+		cacheTTL,
+	)
 
-	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcpserver.NewHTTPHandler(mcpDeps))
-	mux.Handle("/api/", http.StripPrefix("/api", restapi.NewHandler(db, authProvider)))
+	r := chi.NewRouter()
+	r.Get("/livez", health.Livez)
+	r.Get("/readyz", readyChecker.Readyz)
 	if useOIDC {
-		mux.HandleFunc("/auth/login", oidcHandlers.Login)
-		mux.HandleFunc("/auth/callback", oidcHandlers.Callback)
-		mux.HandleFunc("/auth/logout", oidcHandlers.Logout)
+		r.HandleFunc("/auth/login", oidcHandlers.Login)
+		r.HandleFunc("/auth/callback", oidcHandlers.Callback)
+		r.HandleFunc("/auth/logout", oidcHandlers.Logout)
 	}
-	mux.Handle("/", http.FileServer(frontendFS))
+	r.Mount("/mcp", mcpserver.Handler(db, []mcpserver.ToolRegistrar{
+		fetch.NewRegistrar(fetcher),
+		search.NewRegistrar(searcher),
+	}))
+	r.Mount("/api", restapi.NewHandler(db, authProvider))
+	r.Mount("/", http.FileServer(frontendFS))
 
-	return mux, readyChecker, nil
+	return r, readyChecker, nil
 }
 
 // newServer builds the *http.Server this app always serves with, regardless
@@ -239,19 +265,14 @@ func newServer(addr string, handler http.Handler) *http.Server {
 // builds immediately and the server starts serving fully-ready from the very
 // first accepted connection.
 func serveReady(ctx context.Context, cmd *cli.Command, db *gorm.DB) error {
-	appHandler, readyChecker, err := buildAppHandler(ctx, cmd, db)
+	appHandler, _, err := buildAppHandler(ctx, cmd, db)
 	if err != nil {
 		return err
 	}
 
 	go pruneHistoryUntilDone(ctx, db, cmd.Duration("history-retention"))
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/livez", health.Livez)
-	mux.HandleFunc("/readyz", readyChecker.Readyz)
-	mux.Handle("/", appHandler)
-
-	server := newServer(cmd.String("listen-addr"), mux)
+	server := newServer(cmd.String("listen-addr"), appHandler)
 	serveErr := make(chan error, 1)
 	go func() {
 		slog.Info("starting server", "addr", server.Addr, "version", version)
@@ -286,15 +307,15 @@ func serveDegradedUntilReady(ctx context.Context, cmd *cli.Command, dsn string, 
 	}
 	var appHandler atomic.Pointer[http.Handler]
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/livez", health.Livez)
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+	r := chi.NewRouter()
+	r.Get("/livez", health.Livez)
+	r.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		mu.RLock()
 		c := checker
 		mu.RUnlock()
 		c.Readyz(w, r)
 	})
-	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	r.Handle("/*", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if h := appHandler.Load(); h != nil {
 			(*h).ServeHTTP(w, r)
 			return
@@ -302,7 +323,7 @@ func serveDegradedUntilReady(ctx context.Context, cmd *cli.Command, dsn string, 
 		http.Error(w, "starting up: database not yet available", http.StatusServiceUnavailable)
 	}))
 
-	server := newServer(cmd.String("listen-addr"), mux)
+	server := newServer(cmd.String("listen-addr"), r)
 	serveErr := make(chan error, 1)
 	go func() {
 		slog.Info("starting server (degraded: database not yet available)", "addr", server.Addr, "version", version)

@@ -13,7 +13,7 @@ import (
 	"github.com/urfave/cli/v3"
 	"gorm.io/gorm"
 
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
+	"github.com/JetManiack/mcp-webtools/internal/storage"
 )
 
 // parseArgs runs the root command far enough to parse args and env, then hands
@@ -298,9 +298,8 @@ func TestPruneHistoryUntilDonePrunesThenStopsOnContextCancel(t *testing.T) {
 	old := &storage.ToolCall{
 		ActorID:   agent.ID,
 		Tool:      "fetch",
-		Args:      "{}",
-		Status:    storage.ToolCallStatusOK,
-		CreatedAt: time.Now().Add(-48 * time.Hour),
+		InputJSON: "{}",
+		CalledAt:  time.Now().Add(-48 * time.Hour),
 	}
 	if err := storage.RecordToolCall(db, old); err != nil {
 		t.Fatalf("RecordToolCall: %v", err)

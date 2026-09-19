@@ -6,14 +6,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
+	"github.com/JetManiack/mcp-webtools/internal/auth"
+	"github.com/JetManiack/mcp-webtools/internal/storage"
 )
 
 // actorEcho reports whether the wrapped handler saw an authenticated actor.
 func actorEcho(t *testing.T, want *storage.Actor) http.Handler {
 	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		actor, ok := ActorFromContext(r.Context())
+		actor, ok := auth.ActorFromContext(r.Context())
 		if !ok {
 			t.Error("handler ran without an actor in context")
 			w.WriteHeader(http.StatusInternalServerError)
@@ -34,7 +35,7 @@ func TestRequireAgentTokenAcceptsValidToken(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 
-	RequireAgentToken(db, actorEcho(t, agent)).ServeHTTP(rec, req)
+	auth.RequireBearer(db, actorEcho(t, agent)).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want 200", rec.Code)
@@ -74,7 +75,7 @@ func TestRequireAgentTokenRejects(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 
-			RequireAgentToken(db, next).ServeHTTP(rec, req)
+			auth.RequireBearer(db, next).ServeHTTP(rec, req)
 
 			if rec.Code != http.StatusUnauthorized {
 				t.Errorf("status = %d, want 401", rec.Code)
@@ -82,8 +83,6 @@ func TestRequireAgentTokenRejects(t *testing.T) {
 			if called {
 				t.Error("the wrapped handler ran despite failed authentication")
 			}
-			// A 401 without WWW-Authenticate leaves a client with no idea what
-			// kind of credential to present.
 			if got := rec.Header().Get("WWW-Authenticate"); !strings.HasPrefix(got, "Bearer") {
 				t.Errorf("WWW-Authenticate = %q, want a Bearer challenge", got)
 			}
@@ -92,7 +91,7 @@ func TestRequireAgentTokenRejects(t *testing.T) {
 }
 
 func TestActorFromContextWithoutActor(t *testing.T) {
-	if _, ok := ActorFromContext(httptest.NewRequest(http.MethodGet, "/", nil).Context()); ok {
+	if _, ok := auth.ActorFromContext(httptest.NewRequest(http.MethodGet, "/", nil).Context()); ok {
 		t.Error("ActorFromContext reported an actor on a bare context")
 	}
 }

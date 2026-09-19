@@ -9,7 +9,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
+	"github.com/JetManiack/mcp-webtools/internal/storage"
 )
 
 func openTestDB(t *testing.T) *gorm.DB {
@@ -49,8 +49,8 @@ func TestRequireHumanAuthProvisionsActor(t *testing.T) {
 	if gotActor == nil {
 		t.Fatal("no actor was injected into the request context")
 	}
-	if gotActor.DisplayName != "Ada" {
-		t.Errorf("DisplayName = %q, want Ada", gotActor.DisplayName)
+	if gotActor.Name != "Ada" {
+		t.Errorf("Name = %q, want Ada", gotActor.Name)
 	}
 	if gotRole != "admin" {
 		t.Errorf("role = %q, want admin", gotRole)

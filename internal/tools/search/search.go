@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/JetManiack/mcp-webtools/internal/cache"
 )
 
 // DefaultTimeout is used when New is given a non-positive timeout.
@@ -27,6 +30,13 @@ const (
 	MaxResultsLimit = 50
 )
 
+// DefaultResultsCacheBytes bounds the total size of the results cache across
+// all callers. Unlike the fetch cache it is not operator-configurable: search
+// results are small (a page of titles, URLs, and snippets), so a fixed budget
+// is plenty, and keeping it out of the flag surface avoids a knob no one
+// tunes.
+const DefaultResultsCacheBytes = 1 << 20 // 1 MiB
+
 var ErrEmptyQuery = errors.New("query must not be empty")
 
 // Result is one search hit.
@@ -40,23 +50,34 @@ type Result struct {
 type Searcher struct {
 	baseURL string
 	client  *http.Client
+	results cache.Cache[[]Result] // completed searches, keyed by caller + query + limit
 }
 
 // New returns a Searcher querying the SearXNG instance at baseURL. A
-// non-positive timeout falls back to DefaultTimeout.
-func New(baseURL string, timeout time.Duration) *Searcher {
+// non-positive timeout falls back to DefaultTimeout. ttl is how long a
+// completed search stays trusted before the query runs again; a non-positive
+// value falls back to cache.DefaultTTL.
+func New(baseURL string, timeout, ttl time.Duration) *Searcher {
 	if timeout <= 0 {
 		timeout = DefaultTimeout
+	}
+	if ttl <= 0 {
+		ttl = cache.DefaultTTL
 	}
 	return &Searcher{
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		client:  &http.Client{Timeout: timeout},
+		results: cache.New[[]Result](DefaultResultsCacheBytes, ttl),
 	}
 }
 
 // Search runs query against SearXNG and returns at most limit results
 // (DefaultMaxResults when limit is non-positive, MaxResultsLimit at most).
-func (s *Searcher) Search(ctx context.Context, query string, limit int) ([]Result, error) {
+//
+// cacheKey scopes the results cache to the caller (the authenticated agent in
+// the MCP layer, so one agent's cached results can never be served to
+// another); an empty key disables caching for this call.
+func (s *Searcher) Search(ctx context.Context, query string, limit int, cacheKey string) ([]Result, error) {
 	if strings.TrimSpace(query) == "" {
 		return nil, ErrEmptyQuery
 	}
@@ -65,6 +86,18 @@ func (s *Searcher) Search(ctx context.Context, query string, limit int) ([]Resul
 	}
 	if limit > MaxResultsLimit {
 		limit = MaxResultsLimit
+	}
+
+	// The key uses the normalized limit, so Search(q, 0) and Search(q, 10)
+	// share one entry: they ask for exactly the same thing.
+	var key string
+	if cacheKey != "" {
+		key = cacheKey + "\x00" + query + "\x00" + strconv.Itoa(limit)
+	}
+	if key != "" {
+		if results, ok := s.results.Get(key); ok {
+			return results, nil
+		}
 	}
 
 	endpoint, err := url.Parse(s.baseURL + "/search")
@@ -109,6 +142,17 @@ func (s *Searcher) Search(ctx context.Context, query string, limit int) ([]Resul
 	}
 	if payload.Results == nil {
 		payload.Results = []Result{}
+	}
+
+	// Only successes are cached: a failure must stay retryable, and storing
+	// an error would pin it for the whole TTL. The size is the sum of the
+	// fields an LLM actually sees, which is what the budget is protecting.
+	if key != "" {
+		size := int64(0)
+		for i := range payload.Results {
+			size += int64(len(payload.Results[i].Title) + len(payload.Results[i].URL) + len(payload.Results[i].Content))
+		}
+		s.results.Put(key, payload.Results, size)
 	}
 	return payload.Results, nil
 }

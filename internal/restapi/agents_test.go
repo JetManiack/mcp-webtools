@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
+	"github.com/JetManiack/mcp-webtools/internal/storage"
 )
 
 func TestCreateAndListAgents(t *testing.T) {
 	db := openTestDB(t)
 	server := newTestAPI(t, db, providerWithRole("admin"))
 
-	resp := do(t, server, http.MethodPost, "/api/agents", `{"display_name":"scraper-1"}`)
+	resp := do(t, server, http.MethodPost, "/api/actors", `{"display_name":"scraper-1"}`)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", resp.StatusCode)
 	}
@@ -26,7 +26,7 @@ func TestCreateAndListAgents(t *testing.T) {
 		t.Errorf("Kind = %q, want agent", created.Kind)
 	}
 
-	resp = do(t, server, http.MethodGet, "/api/agents", "")
+	resp = do(t, server, http.MethodGet, "/api/actors", "")
 	var agents []agentResponse
 	decode(t, resp, &agents)
 	if len(agents) != 1 {
@@ -51,7 +51,7 @@ func TestCreateAgentRejectsBadInput(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resp := do(t, server, http.MethodPost, "/api/agents", tt.body)
+			resp := do(t, server, http.MethodPost, "/api/actors", tt.body)
 			if resp.StatusCode != http.StatusBadRequest {
 				t.Errorf("status = %d, want 400", resp.StatusCode)
 			}
@@ -64,7 +64,7 @@ func TestIssueTokenIsReturnedOnceAndWorks(t *testing.T) {
 	agent := mustAgent(t, db, "scraper-1")
 	server := newTestAPI(t, db, providerWithRole("admin"))
 
-	resp := do(t, server, http.MethodPost, "/api/agents/"+agent.ID+"/tokens", "")
+	resp := do(t, server, http.MethodPost, "/api/actors/"+agent.ID+"/credentials", "")
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", resp.StatusCode)
 	}
@@ -81,7 +81,7 @@ func TestIssueTokenIsReturnedOnceAndWorks(t *testing.T) {
 	}
 
 	// Listing tokens must never expose the hash (let alone the token).
-	resp = do(t, server, http.MethodGet, "/api/agents/"+agent.ID+"/tokens", "")
+	resp = do(t, server, http.MethodGet, "/api/actors/"+agent.ID+"/credentials", "")
 	body := readBody(t, resp)
 	if strings.Contains(body, issued.Token) {
 		t.Error("the token list echoes the raw token back")
@@ -99,7 +99,7 @@ func TestRevokeSingleToken(t *testing.T) {
 	// Issue the first token and note its credential ID while it's the only one,
 	// so the revocation below targets a known token rather than an arbitrary
 	// row.
-	resp := do(t, server, http.MethodPost, "/api/agents/"+agent.ID+"/tokens", "")
+	resp := do(t, server, http.MethodPost, "/api/actors/"+agent.ID+"/credentials", "")
 	var first issueTokenResponse
 	decode(t, resp, &first)
 
@@ -112,11 +112,11 @@ func TestRevokeSingleToken(t *testing.T) {
 	}
 	firstCredID := creds[0].ID
 
-	resp = do(t, server, http.MethodPost, "/api/agents/"+agent.ID+"/tokens", "")
+	resp = do(t, server, http.MethodPost, "/api/actors/"+agent.ID+"/credentials", "")
 	var second issueTokenResponse
 	decode(t, resp, &second)
 
-	resp = do(t, server, http.MethodDelete, "/api/agents/"+agent.ID+"/tokens/"+firstCredID, "")
+	resp = do(t, server, http.MethodDelete, "/api/credentials/"+firstCredID, "")
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", resp.StatusCode)
 	}
@@ -136,11 +136,11 @@ func TestDeleteAgentRevokesTokensButKeepsTheActor(t *testing.T) {
 	agent := mustAgent(t, db, "scraper-1")
 	server := newTestAPI(t, db, providerWithRole("admin"))
 
-	resp := do(t, server, http.MethodPost, "/api/agents/"+agent.ID+"/tokens", "")
+	resp := do(t, server, http.MethodPost, "/api/actors/"+agent.ID+"/credentials", "")
 	var issued issueTokenResponse
 	decode(t, resp, &issued)
 
-	resp = do(t, server, http.MethodDelete, "/api/agents/"+agent.ID, "")
+	resp = do(t, server, http.MethodDelete, "/api/actors/"+agent.ID, "")
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", resp.StatusCode)
 	}
@@ -151,7 +151,7 @@ func TestDeleteAgentRevokesTokensButKeepsTheActor(t *testing.T) {
 
 	// The agent stays listed, flagged as having no active token — its history
 	// still needs a named owner.
-	resp = do(t, server, http.MethodGet, "/api/agents", "")
+	resp = do(t, server, http.MethodGet, "/api/actors", "")
 	var agents []agentResponse
 	decode(t, resp, &agents)
 	if len(agents) != 1 {
@@ -167,7 +167,7 @@ func TestListAgentTokensEmptyIsArray(t *testing.T) {
 	agent := mustAgent(t, db, "scraper-1")
 	server := newTestAPI(t, db, providerWithRole("admin"))
 
-	resp := do(t, server, http.MethodGet, "/api/agents/"+agent.ID+"/tokens", "")
+	resp := do(t, server, http.MethodGet, "/api/actors/"+agent.ID+"/credentials", "")
 	var creds []storage.AgentCredential
 	decode(t, resp, &creds)
 	if creds == nil {

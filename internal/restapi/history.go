@@ -8,7 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
+	"github.com/JetManiack/mcp-webtools/internal/storage"
 )
 
 type historyListResponse struct {
@@ -34,16 +34,20 @@ func listHistoryHandler(db *gorm.DB) http.HandlerFunc {
 			limit = parsed
 		}
 
-		if status := q.Get("status"); status != "" &&
-			status != string(storage.ToolCallStatusOK) && status != string(storage.ToolCallStatusError) {
-			writeError(w, http.StatusBadRequest, errors.New(`status must be "ok" or "error"`))
-			return
+		var isError *bool
+		if isErrStr := q.Get("is_error"); isErrStr != "" {
+			if isErrStr != "true" && isErrStr != "false" {
+				writeError(w, http.StatusBadRequest, errors.New(`is_error must be "true" or "false"`))
+				return
+			}
+			b := isErrStr == "true"
+			isError = &b
 		}
 
 		calls, next, err := storage.ListToolCalls(db, storage.HistoryFilter{
 			ActorID: q.Get("actor"),
 			Tool:    q.Get("tool"),
-			Status:  q.Get("status"),
+			IsError: isError,
 			Limit:   limit,
 			Cursor:  q.Get("cursor"),
 		})

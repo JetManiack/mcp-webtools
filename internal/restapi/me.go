@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/JetManiack/go-ai-webtools/internal/humanauth"
+	"github.com/JetManiack/mcp-webtools/internal/humanauth"
 )
 
 type meResponse struct {
@@ -24,7 +24,7 @@ func meHandler() http.HandlerFunc {
 
 		writeJSON(w, http.StatusOK, meResponse{
 			ActorID:     actor.ID,
-			DisplayName: actor.DisplayName,
+			DisplayName: actor.Name,
 			Role:        role,
 		})
 	}

@@ -1,4 +1,4 @@
-module github.com/JetManiack/go-ai-webtools
+module github.com/JetManiack/mcp-webtools
 
 go 1.26.5
 

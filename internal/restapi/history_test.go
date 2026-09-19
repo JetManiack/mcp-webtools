@@ -4,15 +4,13 @@ import (
 	"net/http"
 	"testing"
 	"time"
-
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
 )
 
 func TestListHistoryEmpty(t *testing.T) {
 	db := openTestDB(t)
 	server := newTestAPI(t, db, providerWithRole("viewer"))
 
-	resp := do(t, server, http.MethodGet, "/api/history", "")
+	resp := do(t, server, http.MethodGet, "/api/tool-calls", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -36,11 +34,11 @@ func TestListHistoryReturnsCallsWithActorNames(t *testing.T) {
 	db := openTestDB(t)
 	agent := mustAgent(t, db, "scraper-1")
 	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Millisecond)
-	recordCall(t, db, agent.ID, "fetch", storage.ToolCallStatusOK, base)
-	recordCall(t, db, agent.ID, "search", storage.ToolCallStatusError, base.Add(time.Minute))
+	recordCall(t, db, agent.ID, "fetch", false, base)
+	recordCall(t, db, agent.ID, "search", true, base.Add(time.Minute))
 
 	server := newTestAPI(t, db, providerWithRole("viewer"))
-	resp := do(t, server, http.MethodGet, "/api/history", "")
+	resp := do(t, server, http.MethodGet, "/api/tool-calls", "")
 
 	var body historyListResponse
 	decode(t, resp, &body)
@@ -62,9 +60,9 @@ func TestListHistoryFilters(t *testing.T) {
 	one := mustAgent(t, db, "scraper-1")
 	two := mustAgent(t, db, "scraper-2")
 	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Millisecond)
-	recordCall(t, db, one.ID, "fetch", storage.ToolCallStatusOK, base)
-	recordCall(t, db, one.ID, "search", storage.ToolCallStatusError, base.Add(time.Minute))
-	recordCall(t, db, two.ID, "fetch", storage.ToolCallStatusError, base.Add(2*time.Minute))
+	recordCall(t, db, one.ID, "fetch", false, base)
+	recordCall(t, db, one.ID, "search", true, base.Add(time.Minute))
+	recordCall(t, db, two.ID, "fetch", true, base.Add(2*time.Minute))
 
 	server := newTestAPI(t, db, providerWithRole("viewer"))
 
@@ -74,14 +72,14 @@ func TestListHistoryFilters(t *testing.T) {
 		want  int
 	}{
 		{name: "by tool", query: "?tool=fetch", want: 2},
-		{name: "by status", query: "?status=error", want: 2},
+		{name: "by status", query: "?is_error=true", want: 2},
 		{name: "by actor", query: "?actor=" + one.ID, want: 2},
-		{name: "combined", query: "?tool=fetch&status=error", want: 1},
+		{name: "combined", query: "?tool=fetch&is_error=true", want: 1},
 		{name: "limit", query: "?limit=1", want: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resp := do(t, server, http.MethodGet, "/api/history"+tt.query, "")
+			resp := do(t, server, http.MethodGet, "/api/tool-calls"+tt.query, "")
 			if resp.StatusCode != http.StatusOK {
 				t.Fatalf("status = %d, want 200", resp.StatusCode)
 			}
@@ -103,12 +101,12 @@ func TestListHistoryRejectsBadParameters(t *testing.T) {
 		query string
 	}{
 		{name: "non-numeric limit", query: "?limit=lots"},
-		{name: "unknown status", query: "?status=maybe"},
+		{name: "invalid is_error", query: "?is_error=maybe"},
 		{name: "unknown cursor", query: "?cursor=not-a-real-id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resp := do(t, server, http.MethodGet, "/api/history"+tt.query, "")
+			resp := do(t, server, http.MethodGet, "/api/tool-calls"+tt.query, "")
 			if resp.StatusCode != http.StatusBadRequest {
 				t.Errorf("status = %d, want 400", resp.StatusCode)
 			}
@@ -128,7 +126,7 @@ func TestListHistoryPagination(t *testing.T) {
 	agent := mustAgent(t, db, "scraper-1")
 	base := time.Now().Add(-time.Hour).UTC().Truncate(time.Millisecond)
 	for i := range 5 {
-		recordCall(t, db, agent.ID, "fetch", storage.ToolCallStatusOK, base.Add(time.Duration(i)*time.Second))
+		recordCall(t, db, agent.ID, "fetch", false, base.Add(time.Duration(i)*time.Second))
 	}
 
 	server := newTestAPI(t, db, providerWithRole("viewer"))
@@ -139,7 +137,7 @@ func TestListHistoryPagination(t *testing.T) {
 		if page > 5 {
 			t.Fatal("paging did not terminate")
 		}
-		path := "/api/history?limit=2"
+		path := "/api/tool-calls?limit=2"
 		if cursor != "" {
 			path += "&cursor=" + cursor
 		}
@@ -165,11 +163,11 @@ func TestListHistoryPagination(t *testing.T) {
 func TestGetHistoryEntry(t *testing.T) {
 	db := openTestDB(t)
 	agent := mustAgent(t, db, "scraper-1")
-	call := recordCall(t, db, agent.ID, "fetch", storage.ToolCallStatusOK, time.Now().UTC())
+	call := recordCall(t, db, agent.ID, "fetch", false, time.Now().UTC())
 
 	server := newTestAPI(t, db, providerWithRole("viewer"))
 
-	resp := do(t, server, http.MethodGet, "/api/history/"+call.ID, "")
+	resp := do(t, server, http.MethodGet, "/api/tool-calls/"+call.ID, "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -187,7 +185,7 @@ func TestGetHistoryEntryNotFound(t *testing.T) {
 	db := openTestDB(t)
 	server := newTestAPI(t, db, providerWithRole("viewer"))
 
-	resp := do(t, server, http.MethodGet, "/api/history/does-not-exist", "")
+	resp := do(t, server, http.MethodGet, "/api/tool-calls/does-not-exist", "")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}
@@ -197,13 +195,13 @@ func TestListHistoryTools(t *testing.T) {
 	db := openTestDB(t)
 	agent := mustAgent(t, db, "scraper-1")
 	base := time.Now().Add(-time.Hour).UTC()
-	recordCall(t, db, agent.ID, "search", storage.ToolCallStatusOK, base)
-	recordCall(t, db, agent.ID, "fetch", storage.ToolCallStatusOK, base.Add(time.Second))
-	recordCall(t, db, agent.ID, "fetch", storage.ToolCallStatusOK, base.Add(2*time.Second))
+	recordCall(t, db, agent.ID, "search", false, base)
+	recordCall(t, db, agent.ID, "fetch", false, base.Add(time.Second))
+	recordCall(t, db, agent.ID, "fetch", false, base.Add(2*time.Second))
 
 	server := newTestAPI(t, db, providerWithRole("viewer"))
 
-	resp := do(t, server, http.MethodGet, "/api/history/tools", "")
+	resp := do(t, server, http.MethodGet, "/api/tool-calls/tools", "")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
@@ -218,7 +216,7 @@ func TestListHistoryToolsEmptyIsArray(t *testing.T) {
 	db := openTestDB(t)
 	server := newTestAPI(t, db, providerWithRole("viewer"))
 
-	resp := do(t, server, http.MethodGet, "/api/history/tools", "")
+	resp := do(t, server, http.MethodGet, "/api/tool-calls/tools", "")
 	var tools []string
 	decode(t, resp, &tools)
 	if tools == nil {

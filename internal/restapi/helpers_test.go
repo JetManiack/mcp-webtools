@@ -13,8 +13,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/JetManiack/go-ai-webtools/internal/humanauth"
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
+	"github.com/JetManiack/mcp-webtools/internal/humanauth"
+	"github.com/JetManiack/mcp-webtools/internal/storage"
 )
 
 // fakeProvider stands in for the OIDC provider so tests can pick the role of
@@ -98,20 +98,20 @@ func mustAgent(t *testing.T, db *gorm.DB, name string) *storage.Actor {
 	return agent
 }
 
-func recordCall(t *testing.T, db *gorm.DB, actorID, tool string, status storage.ToolCallStatus, at time.Time) *storage.ToolCall {
+func recordCall(t *testing.T, db *gorm.DB, actorID, tool string, isError bool, at time.Time) *storage.ToolCall {
 	t.Helper()
 	call := &storage.ToolCall{
 		ActorID:   actorID,
 		Tool:      tool,
-		Args:      fmt.Sprintf(`{"url":"https://example.com/%d"}`, at.UnixNano()),
-		Status:    status,
-		CreatedAt: at,
+		InputJSON: fmt.Sprintf(`{"url":"https://example.com/%d"}`, at.UnixNano()),
+		IsError:   isError,
+		CalledAt:  at,
 	}
-	if status == storage.ToolCallStatusError {
-		call.ErrorMessage = "boom"
+	if isError {
+		call.OutputJSON = `{"error":"boom"}`
 	} else {
-		call.ResponsePreview = `{"content":"hi"}`
-		call.ResponseBytes = 16
+		call.OutputJSON = `{"content":"hi"}`
+		call.OutputSize = 16
 	}
 	if err := storage.RecordToolCall(db, call); err != nil {
 		t.Fatalf("RecordToolCall: %v", err)

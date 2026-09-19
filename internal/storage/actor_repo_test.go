@@ -200,8 +200,8 @@ func TestListAgentsOnlyReturnsAgents(t *testing.T) {
 	if len(agents) != 1 {
 		t.Fatalf("got %d agents, want 1 (humans must not be listed as agents)", len(agents))
 	}
-	if agents[0].DisplayName != "scraper-1" {
-		t.Errorf("agent = %q, want scraper-1", agents[0].DisplayName)
+	if agents[0].Name != "scraper-1" {
+		t.Errorf("agent = %q, want scraper-1", agents[0].Name)
 	}
 }
 

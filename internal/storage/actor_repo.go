@@ -29,9 +29,9 @@ func CreateAgent(db *gorm.DB, displayName string) (*Actor, error) {
 	}
 
 	actor := &Actor{
-		ID:          uuid.NewString(),
-		DisplayName: displayName,
-		Kind:        ActorKindAgent,
+		ID:   uuid.NewString(),
+		Name: displayName,
+		Kind: ActorKindAgent,
 	}
 	if err := db.Create(actor).Error; err != nil {
 		return nil, err
@@ -115,7 +115,7 @@ func ActorNamesByID(db *gorm.DB, ids []string) (map[string]string, error) {
 		return nil, err
 	}
 	for _, actor := range actors {
-		names[actor.ID] = actor.DisplayName
+		names[actor.ID] = actor.Name
 	}
 	return names, nil
 }

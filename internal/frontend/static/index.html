@@ -409,16 +409,76 @@
       color: var(--text-dim);
     }
     .login-gate a { color: var(--credential); }
+
+    /* ---- shell / sidebar layout ---- */
+    .app-layout {
+      display: flex;
+      min-height: 100vh;
+    }
+    .sidebar {
+      width: 200px;
+      flex-shrink: 0;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      background: #0d1220;
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 1.2rem 0.8rem;
+      gap: 0;
+    }
+    .sidebar-brand {
+      font: 600 15px/1 var(--font-display);
+      color: #fff;
+      padding: 0 0.6rem 1.2rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 0.8rem;
+    }
+    .sidebar-nav {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+    .sidebar-link {
+      display: block;
+      color: var(--text-dim);
+      text-decoration: none;
+      font: 500 13px var(--font-body);
+      padding: 0.45rem 0.6rem;
+      border-radius: 6px;
+      border: 1px solid transparent;
+    }
+    .sidebar-link:hover { color: var(--text); background: var(--surface); }
+    .sidebar-link.active {
+      background: var(--surface);
+      color: var(--text);
+      border-color: var(--border);
+    }
+    .content-area {
+      flex: 1;
+      min-width: 0;
+      overflow-x: hidden;
+    }
+    .page-header {
+      display: flex;
+      align-items: baseline;
+      gap: 1rem;
+      margin-bottom: 1rem;
+    }
+    .page-header .section-title { margin-bottom: 0; }
+    .page-header .count {
+      font: 500 12px/1 var(--font-mono);
+      color: var(--text-dim);
+    }
+    @media (max-width: 640px) {
+      .sidebar { display: none; }
+    }
   </style>
 </head>
 <body>
   <div id="root"></div>
-  <!-- Vendored at build time (see Makefile's vendor-frontend-js target) and
-       served from our own origin — no runtime dependency on a third-party
-       CDN, and no CDN-supplied code executing in the same origin as
-       authenticated sessions. -->
-  <script src="/js/vendor/react.production.min.js"></script>
-  <script src="/js/vendor/react-dom.production.min.js"></script>
   <script src="/js/app.bundle.js"></script>
 </body>
 </html>

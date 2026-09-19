@@ -11,7 +11,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"gorm.io/gorm"
 
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
+	"github.com/JetManiack/mcp-webtools/internal/auth"
+	"github.com/JetManiack/mcp-webtools/internal/storage"
 )
 
 // DefaultPreviewBytes bounds how much of a tool's output is kept in history
@@ -59,9 +60,9 @@ func (rec Recorder) record(ctx context.Context, tool string, in, out any, callEr
 		return
 	}
 
-	actor, ok := ActorFromContext(ctx)
+	actor, ok := auth.ActorFromContext(ctx)
 	if !ok {
-		// Unreachable through /mcp, which is wrapped in RequireAgentToken —
+		// Unreachable through /mcp, which is wrapped in RequireBearer —
 		// so this means a new, unauthenticated entry point was added and
 		// history silently stopped covering it. Say so rather than writing a
 		// row with no owner.
@@ -72,18 +73,19 @@ func (rec Recorder) record(ctx context.Context, tool string, in, out any, callEr
 	call := &storage.ToolCall{
 		ActorID:    actor.ID,
 		Tool:       tool,
-		Args:       marshalForHistory(in),
-		Status:     storage.ToolCallStatusOK,
+		InputJSON:  marshalForHistory(in),
 		DurationMS: elapsed.Milliseconds(),
 	}
 
 	if callErr != nil {
-		call.Status = storage.ToolCallStatusError
-		call.ErrorMessage = callErr.Error()
+		call.IsError = true
+		call.OutputJSON = marshalForHistory(struct {
+			Error string `json:"error"`
+		}{Error: callErr.Error()})
 	} else {
 		encoded := marshalForHistory(out)
-		call.ResponseBytes = int64(len(encoded))
-		call.ResponsePreview, call.Truncated = truncateUTF8(encoded, rec.previewLimit())
+		call.OutputSize = len(encoded)
+		call.OutputJSON, call.Truncated = truncateUTF8(encoded, rec.previewLimit())
 	}
 
 	if err := storage.RecordToolCall(rec.DB, call); err != nil {

@@ -10,7 +10,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
+	"github.com/JetManiack/mcp-webtools/internal/auth"
+	"github.com/JetManiack/mcp-webtools/internal/storage"
 )
 
 func TestTruncateUTF8(t *testing.T) {
@@ -113,7 +114,7 @@ func callRecorded(t *testing.T, rec Recorder, ctx context.Context, out recordedO
 func TestRecordedWritesSuccess(t *testing.T) {
 	db := openTestDB(t)
 	actor := mustAgent(t, db, "scraper-1")
-	ctx := withActor(context.Background(), actor)
+	ctx := auth.WithActorForTesting(context.Background(), actor)
 
 	if err := callRecorded(t, Recorder{DB: db}, ctx, recordedOut{Value: "hi"}, nil); err != nil {
 		t.Fatalf("handler returned %v", err)
@@ -133,14 +134,14 @@ func TestRecordedWritesSuccess(t *testing.T) {
 	if call.ActorID != actor.ID {
 		t.Errorf("ActorID = %q, want %q", call.ActorID, actor.ID)
 	}
-	if call.Status != storage.ToolCallStatusOK {
-		t.Errorf("Status = %q, want ok", call.Status)
+	if call.IsError {
+		t.Errorf("IsError = true, want false for a successful call")
 	}
-	if !strings.Contains(call.ResponsePreview, "hi") {
-		t.Errorf("ResponsePreview = %q, want it to contain the output", call.ResponsePreview)
+	if !strings.Contains(call.OutputJSON, "hi") {
+		t.Errorf("OutputJSON = %q, want it to contain the output", call.OutputJSON)
 	}
-	if call.ResponseBytes == 0 {
-		t.Error("ResponseBytes = 0, want the encoded output size")
+	if call.OutputSize == 0 {
+		t.Error("OutputSize = 0, want the encoded output size")
 	}
 	if call.Truncated {
 		t.Error("Truncated = true for a tiny payload")
@@ -152,7 +153,7 @@ func TestRecordedWritesSuccess(t *testing.T) {
 func TestRecordedWritesFailure(t *testing.T) {
 	db := openTestDB(t)
 	actor := mustAgent(t, db, "scraper-1")
-	ctx := withActor(context.Background(), actor)
+	ctx := auth.WithActorForTesting(context.Background(), actor)
 
 	wantErr := errors.New("fetch: connection refused")
 	if err := callRecorded(t, Recorder{DB: db}, ctx, recordedOut{}, wantErr); !errors.Is(err, wantErr) {
@@ -166,21 +167,18 @@ func TestRecordedWritesFailure(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("got %d history rows, want 1", len(calls))
 	}
-	if calls[0].Status != storage.ToolCallStatusError {
-		t.Errorf("Status = %q, want error", calls[0].Status)
+	if !calls[0].IsError {
+		t.Errorf("IsError = false, want true for a failed call")
 	}
-	if calls[0].ErrorMessage != wantErr.Error() {
-		t.Errorf("ErrorMessage = %q, want %q", calls[0].ErrorMessage, wantErr.Error())
-	}
-	if calls[0].ResponsePreview != "" {
-		t.Errorf("ResponsePreview = %q, want empty for a failed call", calls[0].ResponsePreview)
+	if !strings.Contains(calls[0].OutputJSON, wantErr.Error()) {
+		t.Errorf("OutputJSON = %q, want it to contain the error message", calls[0].OutputJSON)
 	}
 }
 
 func TestRecordedTruncatesLargePreview(t *testing.T) {
 	db := openTestDB(t)
 	actor := mustAgent(t, db, "scraper-1")
-	ctx := withActor(context.Background(), actor)
+	ctx := auth.WithActorForTesting(context.Background(), actor)
 
 	big := strings.Repeat("x", 5000)
 	if err := callRecorded(t, Recorder{DB: db, PreviewBytes: 100}, ctx, recordedOut{Value: big}, nil); err != nil {
@@ -192,16 +190,16 @@ func TestRecordedTruncatesLargePreview(t *testing.T) {
 		t.Fatalf("ListToolCalls: %v", err)
 	}
 	call := calls[0]
-	if len(call.ResponsePreview) != 100 {
-		t.Errorf("len(ResponsePreview) = %d, want 100", len(call.ResponsePreview))
+	if len(call.OutputJSON) != 100 {
+		t.Errorf("len(OutputJSON) = %d, want 100", len(call.OutputJSON))
 	}
 	if !call.Truncated {
 		t.Error("Truncated = false, want true")
 	}
 	// The row must still report the real size, or the UI would claim the agent
 	// received 100 bytes when it received thousands.
-	if call.ResponseBytes <= 100 {
-		t.Errorf("ResponseBytes = %d, want the full encoded size", call.ResponseBytes)
+	if call.OutputSize <= 100 {
+		t.Errorf("OutputSize = %d, want the full encoded size", call.OutputSize)
 	}
 }
 
@@ -246,7 +244,7 @@ func TestRecordedWritesEvenWhenContextIsCancelled(t *testing.T) {
 	db := openTestDB(t)
 	actor := mustAgent(t, db, "scraper-1")
 
-	ctx, cancel := context.WithCancel(withActor(context.Background(), actor))
+	ctx, cancel := context.WithCancel(auth.WithActorForTesting(context.Background(), actor))
 	cancel()
 
 	if err := callRecorded(t, Recorder{DB: db}, ctx, recordedOut{Value: "hi"}, nil); err != nil {

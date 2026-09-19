@@ -64,9 +64,9 @@ func GetOrCreateHumanActor(db *gorm.DB, subject, displayName, role string) (*Act
 			return nil
 		}
 		return tx.Create(&Actor{
-			ID:          newActorID,
-			DisplayName: displayName,
-			Kind:        ActorKindHuman,
+			ID:   newActorID,
+			Name: displayName,
+			Kind: ActorKindHuman,
 		}).Error
 	})
 	if err != nil {

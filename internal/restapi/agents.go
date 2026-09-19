@@ -8,7 +8,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
-	"github.com/JetManiack/go-ai-webtools/internal/storage"
+	"github.com/JetManiack/mcp-webtools/internal/auth"
+	"github.com/JetManiack/mcp-webtools/internal/storage"
 )
 
 type createAgentRequest struct {
@@ -101,7 +102,7 @@ func listAgentTokensHandler(db *gorm.DB) http.HandlerFunc {
 
 func issueTokenHandler(db *gorm.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		token, err := storage.IssueAgentToken(db, chi.URLParam(r, "id"))
+		token, err := auth.Issue(db, chi.URLParam(r, "id"), "")
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -112,7 +113,7 @@ func issueTokenHandler(db *gorm.DB) http.HandlerFunc {
 
 func revokeTokenHandler(db *gorm.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := storage.RevokeAgentToken(db, chi.URLParam(r, "tokenID")); err != nil {
+		if err := storage.RevokeAgentToken(db, chi.URLParam(r, "id")); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}

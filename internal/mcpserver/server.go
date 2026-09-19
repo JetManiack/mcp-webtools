@@ -4,16 +4,18 @@ package mcpserver
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"gorm.io/gorm"
 
-	"github.com/JetManiack/go-ai-webtools/internal/tools/fetch"
-	"github.com/JetManiack/go-ai-webtools/internal/tools/search"
+	"github.com/JetManiack/mcp-webtools/internal/auth"
+	"github.com/JetManiack/mcp-webtools/internal/tools/fetch"
+	"github.com/JetManiack/mcp-webtools/internal/tools/search"
 )
 
 // ServerName is the MCP implementation name advertised to clients.
-const ServerName = "go-ai-webtools"
+const ServerName = "mcp-webtools"
 
 // fallbackVersion is reported when Deps.Version is empty (an unstamped
 // `go build`, as opposed to a release built through the Makefile).
@@ -41,13 +43,13 @@ func RegisterTools(server *mcp.Server, deps Deps) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "fetch",
-		Description: "Retrieve the content of an http(s) URL",
-	}, recorded(rec, "fetch", fetchHandler(deps.Fetcher)))
+		Description: "Retrieve the content of an http(s) URL. Bodies longer than the server's page size come back in pages: when truncated is true, call fetch again with the result's next_offset as offset to read the next page.",
+	}, recorded(rec, "fetch", fetch.Handler(deps.Fetcher)))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "search",
 		Description: "Search the web via a SearXNG instance",
-	}, recorded(rec, "search", searchHandler(deps.Searcher)))
+	}, recorded(rec, "search", search.Handler(deps.Searcher)))
 }
 
 // NewServer builds the MCP server with every tool registered.
@@ -66,5 +68,29 @@ func NewServer(deps Deps) *mcp.Server {
 func NewHTTPHandler(deps Deps) http.Handler {
 	server := NewServer(deps)
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
-	return RequireAgentToken(deps.DB, mcpHandler)
+	return auth.RequireBearer(deps.DB, mcpHandler)
+}
+
+// ToolRegistrar registers one or more tools onto an MCP server.
+type ToolRegistrar interface {
+	Register(srv *mcp.Server, db *gorm.DB)
+}
+
+func clearWriteDeadline(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NewResponseController(w).SetWriteDeadline(time.Time{})
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Handler builds the full /mcp handler: Streamable HTTP transport,
+// registered tools via ToolRegistrar, wrapped in bearer-token auth.
+func Handler(db *gorm.DB, tools []ToolRegistrar) http.Handler {
+	version := fallbackVersion
+	srv := mcp.NewServer(&mcp.Implementation{Name: ServerName, Version: version}, nil)
+	for _, t := range tools {
+		t.Register(srv, db)
+	}
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
+	return clearWriteDeadline(auth.RequireBearer(db, mcpHandler))
 }
