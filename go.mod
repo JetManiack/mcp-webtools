@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/glebarez/sqlite v1.11.0
-	github.com/go-chi/chi/v5 v5.3.1
+	github.com/go-chi/chi/v5 v5.3.2
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/urfave/cli/v3 v3.10.1
