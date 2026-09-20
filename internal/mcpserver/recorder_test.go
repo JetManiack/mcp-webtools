@@ -262,11 +262,11 @@ func TestRecordedWritesEvenWhenContextIsCancelled(t *testing.T) {
 
 func TestRecorderPreviewLimitDefault(t *testing.T) {
 	for _, configured := range []int{0, -1} {
-		if got := (Recorder{PreviewBytes: configured}).previewLimit(); got != DefaultPreviewBytes {
-			t.Errorf("PreviewBytes %d: previewLimit() = %d, want %d", configured, got, DefaultPreviewBytes)
+		if got := (Recorder{PreviewBytes: configured}).PreviewLimit(); got != DefaultPreviewBytes {
+			t.Errorf("PreviewBytes %d: PreviewLimit() = %d, want %d", configured, got, DefaultPreviewBytes)
 		}
 	}
-	if got := (Recorder{PreviewBytes: 42}).previewLimit(); got != 42 {
-		t.Errorf("previewLimit() = %d, want 42", got)
+	if got := (Recorder{PreviewBytes: 42}).PreviewLimit(); got != 42 {
+		t.Errorf("PreviewLimit() = %d, want 42", got)
 	}
 }

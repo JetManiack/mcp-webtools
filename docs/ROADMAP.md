@@ -5,6 +5,26 @@
 - **2 MCP tools** — `fetch` and `search`, served over Streamable HTTP at
   `/mcp` with per-agent bearer-token auth and schemas inferred from typed
   Go input/output structs.
+- **Paginated `fetch` responses** — bodies longer than `--fetch-max-bytes`
+  (default 64 KiB, an LLM-context-sized page) come back truncated with a
+  `truncated` flag and a `next_offset` the agent passes back as `offset` to
+  read on; truncation lands on a UTF-8 rune boundary so every page — and the
+  continuation, which resumes at the cut — is valid text. Each page is its
+  own tool call and its own history row.
+- **Origin fetched once per document** — a first `fetch` captures the whole
+  body (up to `--fetch-cache-max-bytes`, default 32 MiB) into a per-agent
+  LRU snapshot cache with a `--cache-ttl` TTL (default 5 minutes), and every
+  continuation page is served from that snapshot; the first page still
+  returns as fast as the stream delivers it (the capture runs under a
+  3-second budget and a body that doesn't finish in time simply isn't
+  cached, degrading to per-page re-reads).
+- **Executed requests cached for `--cache-ttl`** — a successful `fetch` page
+  and a `search` result is kept in a per-agent byte-budgeted LRU cache for
+  the TTL, so an identical repeat within that window is served from memory
+  without re-hitting the origin or the SearXNG instance. Cache keys include
+  the `fetch` offset and the normalized `search` limit, so distinct requests
+  never collide; failures are never cached, so a failed request stays
+  retryable.
 - **Tool-call history** — one `ToolCall` row per invocation (arguments,
   outcome, error message, duration, response size, bounded response
   preview), written by a single generic wrapper applied at tool

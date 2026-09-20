@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -36,7 +37,7 @@ func TestSearchSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	results, err := New(server.URL, 0).Search(context.Background(), "go mcp server", 0)
+	results, err := New(server.URL, 0, 0).Search(context.Background(), "go mcp server", 0, "")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -65,18 +66,21 @@ func TestSearchTrimsBaseURLSlash(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if _, err := New(server.URL+"/", 0).Search(context.Background(), "q", 0); err != nil {
+	if _, err := New(server.URL+"/", 0, 0).Search(context.Background(), "q", 0, ""); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 }
 
+// An empty cacheKey disables caching, which the subtests rely on: they reuse
+// one Searcher and several ask for the same normalized limit, so a non-empty
+// key would let one subtest serve another from the cache.
 func TestSearchLimits(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(resultsJSON(80)))
 	}))
 	defer server.Close()
 
-	searcher := New(server.URL, 0)
+	searcher := New(server.URL, 0, 0)
 	tests := []struct {
 		name  string
 		limit int
@@ -89,7 +93,7 @@ func TestSearchLimits(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			results, err := searcher.Search(context.Background(), "q", tt.limit)
+			results, err := searcher.Search(context.Background(), "q", tt.limit, "")
 			if err != nil {
 				t.Fatalf("Search: %v", err)
 			}
@@ -106,7 +110,7 @@ func TestSearchEmptyResultsIsEmptySliceNotNil(t *testing.T) {
 	}))
 	defer server.Close()
 
-	results, err := New(server.URL, 0).Search(context.Background(), "q", 0)
+	results, err := New(server.URL, 0, 0).Search(context.Background(), "q", 0, "")
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -120,7 +124,7 @@ func TestSearchEmptyResultsIsEmptySliceNotNil(t *testing.T) {
 
 func TestSearchEmptyQuery(t *testing.T) {
 	for _, query := range []string{"", "   "} {
-		if _, err := New("http://unused", 0).Search(context.Background(), query, 0); !errors.Is(err, ErrEmptyQuery) {
+		if _, err := New("http://unused", 0, 0).Search(context.Background(), query, 0, ""); !errors.Is(err, ErrEmptyQuery) {
 			t.Errorf("query %q: error = %v, want ErrEmptyQuery", query, err)
 		}
 	}
@@ -135,7 +139,7 @@ func TestSearch403NamesTheJSONFormatCause(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := New(server.URL, 0).Search(context.Background(), "q", 0)
+	_, err := New(server.URL, 0, 0).Search(context.Background(), "q", 0, "")
 	if err == nil {
 		t.Fatal("Search succeeded, want error")
 	}
@@ -150,7 +154,7 @@ func TestSearchOtherStatusIsError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	if _, err := New(server.URL, 0).Search(context.Background(), "q", 0); err == nil {
+	if _, err := New(server.URL, 0, 0).Search(context.Background(), "q", 0, ""); err == nil {
 		t.Fatal("Search succeeded, want error")
 	}
 }
@@ -161,7 +165,7 @@ func TestSearchMalformedJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := New(server.URL, 0).Search(context.Background(), "q", 0)
+	_, err := New(server.URL, 0, 0).Search(context.Background(), "q", 0, "")
 	if err == nil {
 		t.Fatal("Search succeeded, want decode error")
 	}
@@ -177,7 +181,7 @@ func TestSearchHonorsConfiguredTimeout(t *testing.T) {
 	defer server.Close()
 
 	start := time.Now()
-	if _, err := New(server.URL, 50*time.Millisecond).Search(context.Background(), "q", 0); err == nil {
+	if _, err := New(server.URL, 50*time.Millisecond, 0).Search(context.Background(), "q", 0, ""); err == nil {
 		t.Fatal("Search succeeded, want timeout error")
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
@@ -187,8 +191,108 @@ func TestSearchHonorsConfiguredTimeout(t *testing.T) {
 
 func TestNewFallsBackToDefaultTimeout(t *testing.T) {
 	for _, timeout := range []time.Duration{0, -time.Second} {
-		if got := New("http://unused", timeout).client.Timeout; got != DefaultTimeout {
+		if got := New("http://unused", timeout, 0).client.Timeout; got != DefaultTimeout {
 			t.Errorf("timeout %v: client.Timeout = %v, want %v", timeout, got, DefaultTimeout)
 		}
+	}
+}
+
+// A repeated, fully-identical search is served from the results cache, not
+// the instance: the origin (the SearXNG proxy here) must be hit exactly once.
+func TestSearchRepeatedQueryHitsOriginOnce(t *testing.T) {
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(resultsJSON(3)))
+	}))
+	defer server.Close()
+
+	searcher := New(server.URL, 0, 0)
+	for i := 0; i < 3; i++ {
+		results, err := searcher.Search(context.Background(), "go mcp server", 0, "agent-1")
+		if err != nil {
+			t.Fatalf("Search %d: %v", i, err)
+		}
+		if len(results) != 3 {
+			t.Fatalf("Search %d: got %d results, want 3", i, len(results))
+		}
+	}
+	if got := hits.Load(); got != 1 {
+		t.Errorf("origin was hit %d times for 3 identical searches, want 1", got)
+	}
+}
+
+// The cache key includes the normalized limit, so a different page size is a
+// different request and must reach the instance again.
+func TestSearchDifferentLimitIsNotCached(t *testing.T) {
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(resultsJSON(50)))
+	}))
+	defer server.Close()
+
+	searcher := New(server.URL, 0, 0)
+	if _, err := searcher.Search(context.Background(), "q", 5, "agent-1"); err != nil {
+		t.Fatalf("Search limit 5: %v", err)
+	}
+	if _, err := searcher.Search(context.Background(), "q", 5, "agent-1"); err != nil {
+		t.Fatalf("repeat Search limit 5: %v", err)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("origin was hit %d times before the different limit, want 1", got)
+	}
+	if _, err := searcher.Search(context.Background(), "q", 10, "agent-1"); err != nil {
+		t.Fatalf("Search limit 10: %v", err)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Errorf("origin was hit %d times after a different limit, want 2", got)
+	}
+}
+
+// The cache key includes the caller, so one agent's cached search can never
+// be served to another: each key must be its own entry and its own origin hit.
+func TestSearchCacheIsScopedPerCaller(t *testing.T) {
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(resultsJSON(2)))
+	}))
+	defer server.Close()
+
+	searcher := New(server.URL, 0, 0)
+	for _, agent := range []string{"agent-1", "agent-2"} {
+		for i := 0; i < 2; i++ {
+			if _, err := searcher.Search(context.Background(), "q", 0, agent); err != nil {
+				t.Fatalf("Search as %s (%d): %v", agent, i, err)
+			}
+		}
+	}
+	// Two agents, two searches each: two origin hits, not four and not one.
+	if got := hits.Load(); got != 2 {
+		t.Errorf("origin was hit %d times for two agents, want 2 (one per agent)", got)
+	}
+}
+
+// An expired cache entry must be re-queried: a search result is a snapshot
+// of a moving index, not a fact.
+func TestSearchExpiredResultIsRequeried(t *testing.T) {
+	var hits atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(resultsJSON(2)))
+	}))
+	defer server.Close()
+
+	searcher := New(server.URL, 0, 0)
+	if _, err := searcher.Search(context.Background(), "q", 0, "agent-1"); err != nil {
+		t.Fatalf("first Search: %v", err)
+	}
+	searcher.results.ExpireAllForTesting()
+	if _, err := searcher.Search(context.Background(), "q", 0, "agent-1"); err != nil {
+		t.Fatalf("second Search: %v", err)
+	}
+	if got := hits.Load(); got != 2 {
+		t.Errorf("origin was hit %d times after expiry, want 2", got)
 	}
 }

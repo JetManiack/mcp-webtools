@@ -17,17 +17,26 @@ and you get the log.
 
 ## Features
 
-- **2 MCP tools** for agents: `fetch` (retrieve an http(s) URL) and `search`
-  (query a [SearXNG](https://docs.searxng.org) instance), served over
-  Streamable HTTP at `/mcp` with typed input/output schemas.
+- **2 MCP tools** for agents: `fetch` (retrieve an http(s) URL; bodies longer
+  than the page size come back paginated via `offset`/`next_offset`, and
+  continuation pages are served from a bounded snapshot cache so the origin
+  is fetched once per document, not once per page) and `search` (query a
+  [SearXNG](https://docs.searxng.org) instance), served over Streamable HTTP
+  at `/mcp` with typed input/output schemas. Completed `fetch` pages and
+  `search` results are cached for `--cache-ttl` (default 5m), so an identical
+  repeat within that window is served from memory without re-hitting the
+  origin or the SearXNG instance — each cache is per-agent and never stores
+  failures.
 - **Per-agent bearer tokens** — each agent is an `Actor` with its own
   revocable credential; no shared secret.
 - **Tool-call history** — one row per invocation with arguments, outcome,
   duration, response size and a bounded response preview. Recording can never
   fail the call it records.
-- **Bounded by construction** — per-request timeouts and a maximum response
-  size on `fetch`, a capped result count on `search`, a capped history preview,
-  and optional history retention.
+- **Bounded by construction** — per-request timeouts, a page size on `fetch`
+  (a longer body is truncated to a page; the agent retrieves the rest with
+  the `offset` field), byte-budgeted LRU caches with TTLs (document
+  snapshots, `fetch` pages, `search` results), a capped result count on
+  `search`, a capped history preview, and optional history retention.
 - **REST API + React web UI** for humans: browse and filter history, inspect a
   single call, and manage agent credentials.
 - **Keycloak/OIDC login** for humans, with group-based role gating (`admin` vs
@@ -45,6 +54,7 @@ cmd/webtools/          CLI entrypoint, flag/env parsing, server wiring
 internal/mcpserver/    MCP tools + bearer-token auth + history recording (/mcp)
 internal/tools/fetch/  HTTP fetcher
 internal/tools/search/ SearXNG client
+internal/cache/        Shared byte-budgeted LRU cache with TTL (document snapshots, fetch pages, search results)
 internal/restapi/      REST API for humans, mounted under /api
 internal/humanauth/    OIDC provider, session handling, stub auth (dev only)
 internal/storage/      GORM models + SQLite/Postgres backends
@@ -70,11 +80,12 @@ or `human`), so a history row needs one foreign key regardless of who caused
 it. Agents authenticate with a revocable bearer token (`AgentCredential`);
 humans authenticate via an OIDC session (`UserIdentity` + `Session`).
 
-`ToolCall` holds the history: full arguments (a URL or a query — small enough
-to keep whole), plus outcome, `duration_ms`, `response_bytes`, and a
-`response_preview` capped at `--history-preview-bytes`. A single `fetch` can
-return megabytes, so responses are previewed rather than stored whole; the row
-records the true size and a `truncated` flag.
+`ToolCall` holds the history: full arguments (a URL plus page offset, or a
+query — small enough to keep whole), plus outcome, `duration_ms`,
+`response_bytes`, and a `response_preview` capped at
+`--history-preview-bytes`. A fetched document can be megabytes, so `fetch`
+returns it in pages — each page its own call and its own history row, with
+the preview cap and `truncated` flag still applied per row.
 
 ## Getting started
 
@@ -134,7 +145,9 @@ Every flag has an environment-variable equivalent (see `--help`):
 | `--db-dsn` | `DB_DSN` | `data/webtools.db` | SQLite path or `postgres://…` |
 | `--searxng-url` | `SEARXNG_URL` | `http://localhost:8080` | SearXNG base URL |
 | `--fetch-timeout` | `FETCH_TIMEOUT` | `15s` | Per-request timeout for `fetch` |
-| `--fetch-max-bytes` | `FETCH_MAX_BYTES` | `2097152` | Max body `fetch` returns |
+| `--fetch-max-bytes` | `FETCH_MAX_BYTES` | `65536` | Page size for the body `fetch` returns; longer bodies are paginated via the `offset` field |
+| `--fetch-cache-max-bytes` | `FETCH_CACHE_MAX_BYTES` | `33554432` | Byte budget of the `fetch` snapshot and results caches (LRU eviction) |
+| `--cache-ttl` | `CACHE_TTL` | `5m` | TTL of cached fetch pages, document snapshots, and search results; a non-positive value uses the default |
 | `--search-timeout` | `SEARCH_TIMEOUT` | `10s` | Per-request timeout for `search` |
 | `--history-preview-bytes` | `HISTORY_PREVIEW_BYTES` | `65536` | Stored response preview cap |
 | `--history-retention` | `HISTORY_RETENTION` | `0` (keep all) | Prune history older than this |
