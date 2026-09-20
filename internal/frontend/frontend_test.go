@@ -28,13 +28,11 @@ func TestFSServesIndexAtRoot(t *testing.T) {
 	if !strings.Contains(string(body), `id="root"`) {
 		t.Error(`index.html is missing the id="root" mount point the SPA renders into`)
 	}
-	// The bundle and the vendored React are produced by `make generate`, so
-	// their absence from a bare checkout is expected — but index.html must
-	// still be the thing that asks for them.
-	for _, want := range []string{"/js/app.bundle.js", "/js/vendor/react.production.min.js"} {
-		if !strings.Contains(string(body), want) {
-			t.Errorf("index.html does not load %s", want)
-		}
+	// The bundle is produced by `make generate` (esbuild bundles React directly
+	// into it), so its absence from a bare checkout is expected — but index.html
+	// must still be the thing that asks for it.
+	if !strings.Contains(string(body), "/js/app.bundle.js") {
+		t.Error("index.html does not load /js/app.bundle.js")
 	}
 }
 
