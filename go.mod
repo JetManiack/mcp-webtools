@@ -9,7 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/urfave/cli/v3 v3.10.1
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.37.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.2
 )
