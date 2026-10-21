@@ -67,7 +67,7 @@ type ToolCall struct {
 	ID        string `gorm:"type:char(36);primaryKey" json:"id"`
 	ActorID   string `gorm:"type:char(36);not null;index:idx_tool_calls_actor_created,priority:1" json:"actor_id"`
 	Tool      string `gorm:"type:varchar(64);not null;index:idx_tool_calls_tool_created,priority:1" json:"tool"`
-	InputJSON string `gorm:"type:text;not null" json:"input_json"`
+	InputJSON string `gorm:"type:text;not null;default:''" json:"input_json"`
 
 	IsError bool `json:"is_error"`
 
