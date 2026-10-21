@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/JetManiack/mcp-webtools/internal/cache"
+	"github.com/JetManiack/mcp-webtools/internal/httpclient"
 )
 
 // DefaultTimeout and DefaultMaxBytes are used when New is given
@@ -104,7 +105,7 @@ func New(timeout time.Duration, maxBytes, cacheBudget int64, ttl time.Duration) 
 		ttl = cache.DefaultTTL
 	}
 	return &Fetcher{
-		client:      &http.Client{Timeout: timeout},
+		client:      httpclient.New(timeout, 2),
 		maxBytes:    maxBytes,
 		cacheBudget: cacheBudget,
 		snapshots:   cache.New[docEntry](cacheBudget, ttl),

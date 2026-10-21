@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/JetManiack/mcp-webtools/internal/cache"
+	"github.com/JetManiack/mcp-webtools/internal/httpclient"
 )
 
 // DefaultTimeout is used when New is given a non-positive timeout.
@@ -66,7 +67,7 @@ func New(baseURL string, timeout, ttl time.Duration) *Searcher {
 	}
 	return &Searcher{
 		baseURL: strings.TrimSuffix(baseURL, "/"),
-		client:  &http.Client{Timeout: timeout},
+		client:  httpclient.New(timeout, 2),
 		results: cache.New[[]Result](DefaultResultsCacheBytes, ttl),
 	}
 }

@@ -8,3 +8,4 @@ data
 bin
 internal/frontend/static/js
 internal/frontend/static/fonts
+web/node_modules
