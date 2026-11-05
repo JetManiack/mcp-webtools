@@ -1,8 +1,10 @@
-export function useCurrentUser() {
-  const [user, setUser] = React.useState(null);
-  const [error, setError] = React.useState(null);
+import { useState, useEffect } from "react";
 
-  React.useEffect(() => {
+export function useCurrentUser() {
+  const [user, setUser] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
     fetch("/api/me")
       .then((res) => {
         if (!res.ok) {
@@ -13,6 +15,7 @@ export function useCurrentUser() {
       .then(setUser)
       .catch((err) => setError(String(err)));
   }, []);
+
 
   return { user, error };
 }

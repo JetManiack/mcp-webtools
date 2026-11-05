@@ -193,7 +193,7 @@ func buildAppHandler(ctx context.Context, cmd *cli.Command, db *gorm.DB) (http.H
 		slog.Warn("human auth running in STUB mode — do not deploy to production")
 	}
 
-	frontendFS, err := frontend.FS(false)
+	frontendHandler, err := frontend.Handler()
 	if err != nil {
 		return nil, health.ReadyChecker{}, err
 	}
@@ -238,7 +238,7 @@ func buildAppHandler(ctx context.Context, cmd *cli.Command, db *gorm.DB) (http.H
 		search.NewRegistrar(searcher),
 	}))
 	r.Mount("/api", restapi.NewHandler(db, authProvider))
-	r.Mount("/", http.FileServer(frontendFS))
+	r.Mount("/", frontendHandler)
 
 	return r, readyChecker, nil
 }

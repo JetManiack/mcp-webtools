@@ -5,6 +5,8 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
+	"net/url"
+	"strings"
 )
 
 //go:generate npm --prefix ../../web install
@@ -25,4 +27,32 @@ func FS(devel bool) (http.FileSystem, error) {
 		return nil, err
 	}
 	return http.FS(sub), nil
+}
+
+// Handler returns an http.Handler that serves the embedded UI.
+// Unknown paths (React client-side routes) fall back to index.html so
+// BrowserRouter navigation works when the user refreshes or bookmarks a
+// sub-path like /tool-calls or /actors.
+func Handler() (http.Handler, error) {
+	sub, err := fs.Sub(assets, "static")
+	if err != nil {
+		return nil, err
+	}
+	fileServer := http.FileServer(http.FS(sub))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fsPath := strings.TrimPrefix(r.URL.Path, "/")
+		if fsPath == "" {
+			fsPath = "."
+		}
+		f, openErr := sub.Open(fsPath)
+		if openErr == nil {
+			f.Close()
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		// Unknown path — let React router handle it.
+		r2 := r.Clone(r.Context())
+		r2.URL = &url.URL{Path: "/"}
+		fileServer.ServeHTTP(w, r2)
+	}), nil
 }
