@@ -12,6 +12,14 @@ import (
 	"unicode/utf8"
 )
 
+// testFetcher wraps newFetcher for use in tests that need a plain http.Client
+// (no SSRF guard) hitting httptest servers on 127.0.0.1. The timeout param
+// matches the old New() signature so callers don't need changes.
+func testFetcher(timeout time.Duration, maxBytes, cacheBudget int64, ttl time.Duration) *Fetcher {
+	client := &http.Client{Timeout: timeout}
+	return newFetcher(client, maxBytes, cacheBudget, ttl)
+}
+
 func TestFetchSuccess(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -19,7 +27,7 @@ func TestFetchSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result, err := New(0, 0, 0, 0).Fetch(context.Background(), server.URL, 0, "")
+	result, err := testFetcher(0, 0, 0, 0).Fetch(context.Background(), server.URL, 0, "")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -56,7 +64,7 @@ func TestFetchNon2xxIsError(t *testing.T) {
 		// A redirect is followed by the client, so 301 only surfaces here when
 		// there's no Location header — which is exactly the "broken response"
 		// case that must not be handed back as content.
-		_, err := New(0, 0, 0, 0).Fetch(context.Background(), server.URL, 0, "")
+		_, err := testFetcher(0, 0, 0, 0).Fetch(context.Background(), server.URL, 0, "")
 		if err == nil {
 			t.Errorf("status %d: Fetch succeeded, want error", status)
 		}
@@ -71,7 +79,7 @@ func TestFetchTruncatesAtMaxBytes(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result, err := New(0, 10, 0, 0).Fetch(context.Background(), server.URL, 0, "")
+	result, err := testFetcher(0, 10, 0, 0).Fetch(context.Background(), server.URL, 0, "")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -98,7 +106,7 @@ func TestFetchExactlyMaxBytesIsNotTruncated(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result, err := New(0, 10, 0, 0).Fetch(context.Background(), server.URL, 0, "")
+	result, err := testFetcher(0, 10, 0, 0).Fetch(context.Background(), server.URL, 0, "")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -122,7 +130,7 @@ func TestFetchPaginatesWholeDocument(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := New(0, 100, 0, 0)
+	fetcher := testFetcher(0, 100, 0, 0)
 	var reassembled strings.Builder
 	offset := int64(0)
 	for i := 0; i < 5; i++ {
@@ -162,7 +170,7 @@ func TestFetchTruncationEndsOnRuneBoundary(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := New(0, 119, 0, 0)
+	fetcher := testFetcher(0, 119, 0, 0)
 	first, err := fetcher.Fetch(context.Background(), server.URL, 0, "")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
@@ -203,7 +211,7 @@ func TestFetchOffsetBeyondEndIsEmptyPage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result, err := New(0, 100, 0, 0).Fetch(context.Background(), server.URL, 50, "")
+	result, err := testFetcher(0, 100, 0, 0).Fetch(context.Background(), server.URL, 50, "")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -230,7 +238,7 @@ func TestFetchRejectsBadInput(t *testing.T) {
 		{name: "negative offset", url: "http://example.com", offset: -1, wantErr: ErrNegativeOffset},
 	}
 
-	fetcher := New(0, 0, 0, 0)
+	fetcher := testFetcher(0, 0, 0, 0)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := fetcher.Fetch(context.Background(), tt.url, tt.offset, "")
@@ -253,7 +261,7 @@ func TestFetchHonorsConfiguredTimeout(t *testing.T) {
 	defer server.Close()
 
 	start := time.Now()
-	_, err := New(50*time.Millisecond, 0, 0, 0).Fetch(context.Background(), server.URL, 0, "")
+	_, err := testFetcher(50*time.Millisecond, 0, 0, 0).Fetch(context.Background(), server.URL, 0, "")
 	if err == nil {
 		t.Fatal("Fetch succeeded, want timeout error")
 	}
@@ -274,7 +282,7 @@ func TestFetchHonorsContextCancellation(t *testing.T) {
 		cancel()
 	}()
 
-	if _, err := New(0, 0, 0, 0).Fetch(ctx, server.URL, 0, ""); !errors.Is(err, context.Canceled) {
+	if _, err := testFetcher(0, 0, 0, 0).Fetch(ctx, server.URL, 0, ""); !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
 }
@@ -290,7 +298,7 @@ func TestFetchContinuationIsServedFromSnapshot(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := New(0, 100, 0, 0)
+	fetcher := testFetcher(0, 100, 0, 0)
 	var reassembled strings.Builder
 	offset := int64(0)
 	for i := 0; i < 5; i++ {
@@ -323,7 +331,7 @@ func TestFetchCacheIsScopedByCacheKey(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := New(0, 100, 0, 0)
+	fetcher := testFetcher(0, 100, 0, 0)
 	if _, err := fetcher.Fetch(context.Background(), server.URL, 0, "agent-1"); err != nil {
 		t.Fatalf("Fetch (agent-1): %v", err)
 	}
@@ -346,7 +354,7 @@ func TestFetchExpiredSnapshotIsRefetched(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := New(0, 100, 0, 0)
+	fetcher := testFetcher(0, 100, 0, 0)
 	if _, err := fetcher.Fetch(context.Background(), server.URL, 0, "agent-1"); err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -375,7 +383,7 @@ func TestFetchCacheEvictsWhenOverBudget(t *testing.T) {
 	}))
 	defer serverB.Close()
 
-	fetcher := New(0, 50, 200, 0) // budget 200: both documents fit alone, not together
+	fetcher := testFetcher(0, 50, 200, 0) // budget 200: both documents fit alone, not together
 	if _, err := fetcher.Fetch(context.Background(), serverA.URL, 0, "agent-1"); err != nil {
 		t.Fatalf("Fetch A: %v", err)
 	}
@@ -409,7 +417,7 @@ func TestFetchOversizedDocumentPagesAreResultCached(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := New(0, 50, 100, 0) // 200-byte body does not fit the 100 snapshot budget
+	fetcher := testFetcher(0, 50, 100, 0) // 200-byte body does not fit the 100 snapshot budget
 	if fetcher.snapshots.Len() != 0 {
 		t.Fatal("test invariant broken")
 	}
@@ -451,7 +459,7 @@ func TestFetchExpiredResultIsRefetched(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := New(0, 50, 100, 0) // oversized body: pages live in the result cache only
+	fetcher := testFetcher(0, 50, 100, 0) // oversized body: pages live in the result cache only
 	if _, err := fetcher.Fetch(context.Background(), server.URL, 0, "agent-1"); err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -479,7 +487,7 @@ func TestFetchChunkedBodyIsCachedWhenItFits(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fetcher := New(0, 50, 100, 0)
+	fetcher := testFetcher(0, 50, 100, 0)
 	first, err := fetcher.Fetch(context.Background(), server.URL, 0, "agent-1")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
@@ -516,7 +524,7 @@ func TestNewFallsBackToDefaults(t *testing.T) {
 			t.Errorf("timeout %v: cache budget = %d, want %d", timeout, f.snapshots.MaxBytes(), DefaultCacheMaxBytes)
 		}
 	}
-	if f := New(0, 1<<20, 100, 0); f.snapshots.MaxBytes() != 1<<20 {
+	if f := testFetcher(0, 1<<20, 100, 0); f.snapshots.MaxBytes() != 1<<20 {
 		t.Errorf("cache budget = %d, want it raised to the page size %d", f.snapshots.MaxBytes(), 1<<20)
 	}
 }

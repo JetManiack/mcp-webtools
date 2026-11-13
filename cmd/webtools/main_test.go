@@ -70,7 +70,6 @@ func TestFlagsReadEnvironment(t *testing.T) {
 	t.Setenv("SEARXNG_URL", "http://searxng.internal:8888")
 	t.Setenv("LISTEN_ADDR", ":9999")
 	t.Setenv("HISTORY_RETENTION", "720h")
-	t.Setenv("AUTH_STUB", "true")
 
 	cmd := parseArgs(t)
 
@@ -83,8 +82,15 @@ func TestFlagsReadEnvironment(t *testing.T) {
 	if got := cmd.Duration("history-retention"); got != 720*time.Hour {
 		t.Errorf("history-retention = %v, want 720h", got)
 	}
-	if !cmd.Bool("auth-stub") {
-		t.Error("auth-stub = false, want true from AUTH_STUB")
+}
+
+// AUTH_STUB env var must not activate stub auth — a leaked env var in a
+// shared environment must not silently bypass authentication.
+func TestAuthStubEnvVarIgnored(t *testing.T) {
+	t.Setenv("AUTH_STUB", "true")
+	cmd := parseArgs(t)
+	if cmd.Bool("auth-stub") {
+		t.Error("auth-stub = true from AUTH_STUB env var — only the --auth-stub flag must enable stub auth")
 	}
 }
 

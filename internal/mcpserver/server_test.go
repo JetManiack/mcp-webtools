@@ -70,7 +70,7 @@ func testDeps(db *gorm.DB, searxngURL string) Deps {
 		// A zero TTL keeps entries live for the whole test, so caching
 		// behavior in these tests is deterministic.
 		DB:       db,
-		Fetcher:  fetch.New(2*time.Second, 1<<20, 0, 0),
+		Fetcher:  fetch.NewWithClient(&http.Client{Timeout: 2 * time.Second}, 1<<20, 0, 0),
 		Searcher: search.New(searxngURL, 2*time.Second, 0),
 		Version:  "test",
 	}
@@ -172,7 +172,7 @@ func TestFetchToolPaginatesLargeBodies(t *testing.T) {
 	defer origin.Close()
 
 	deps := testDeps(db, "http://unused")
-	deps.Fetcher = fetch.New(2*time.Second, 64, 0, 0)
+	deps.Fetcher = fetch.NewWithClient(&http.Client{Timeout: 2 * time.Second}, 64, 0, 0)
 	session := connectSession(t, deps, token)
 
 	var got strings.Builder

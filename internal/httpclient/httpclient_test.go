@@ -30,7 +30,7 @@ func TestProxyFromEnvironment(t *testing.T) {
 	t.Setenv("HTTP_PROXY", proxy.URL)
 	t.Setenv("NO_PROXY", "")
 
-	c := New(5*time.Second, 0)
+	c := NewInternal(5*time.Second, 0)
 	// http.ProxyFromEnvironment caches nothing per-client, but never proxies
 	// localhost — use a non-local name; the proxy answers without dialing it.
 	resp, err := c.Get("http://proxy-check.invalid/")
@@ -55,7 +55,7 @@ func TestRetryOn5xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(10*time.Second, 2)
+	c := NewInternal(10*time.Second, 2)
 	resp, err := c.Get(srv.URL)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -78,7 +78,7 @@ func TestNoProxyHonoured(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(5*time.Second, 0)
+	c := NewInternal(5*time.Second, 0)
 	resp, err := c.Get(srv.URL)
 	if err != nil {
 		t.Fatalf("Get with NO_PROXY: %v (request was proxied despite NO_PROXY)", err)

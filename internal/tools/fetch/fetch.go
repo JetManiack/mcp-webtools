@@ -95,9 +95,13 @@ func New(timeout time.Duration, maxBytes, cacheBudget int64, ttl time.Duration) 
 	return newFetcher(httpclient.New(timeout, 2), maxBytes, cacheBudget, ttl)
 }
 
-// newFetcher is the internal constructor that accepts a pre-built HTTP client.
-// Tests call it directly with a plain client so the SSRF guard does not block
-// loopback httptest addresses.
+// NewWithClient creates a Fetcher using the provided HTTP client instead of
+// the default SSRF-guarded one. Use in tests to inject a plain client that
+// can reach httptest loopback addresses.
+func NewWithClient(client *http.Client, maxBytes, cacheBudget int64, ttl time.Duration) *Fetcher {
+	return newFetcher(client, maxBytes, cacheBudget, ttl)
+}
+
 func newFetcher(client *http.Client, maxBytes, cacheBudget int64, ttl time.Duration) *Fetcher {
 	if maxBytes <= 0 {
 		maxBytes = DefaultMaxBytes
