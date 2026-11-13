@@ -10,14 +10,15 @@
 //   - Transient failures are retried with backoff (hashicorp
 //     go-retryablehttp): connection resets and 5xx/429 responses, with the
 //     caller's timeout still bounding the total attempt.
-//   - SSRF is blocked: the dial step resolves the hostname and rejects any
-//     address that falls in a private or loopback range before the TCP
-//     connection is opened. Using the resolved IP for the actual dial also
-//     prevents DNS-rebinding attacks.
+//   - SSRF is blocked: the RoundTripper wrapper resolves the request's
+//     target hostname and rejects any address in a private or loopback
+//     range before the request reaches the transport layer. Checking the
+//     URL here (not in DialContext) means the guard fires even when the
+//     TCP connection goes through an HTTP proxy — DialContext only sees
+//     the proxy address, not the final destination.
 package httpclient
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -57,29 +58,27 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-var baseDialer = &net.Dialer{
-	Timeout:   30 * time.Second,
-	KeepAlive: 30 * time.Second,
+// ssrfGuard is a RoundTripper that checks the request's target URL before
+// delegating to the inner transport. It rejects requests to private or
+// loopback addresses regardless of whether the connection goes through an
+// HTTP proxy. Note: a DNS-rebinding window remains between this check and
+// the actual connection; squid ACLs (deny to_localnet) provide the second
+// layer of defence.
+type ssrfGuard struct {
+	inner http.RoundTripper
 }
 
-// safeDialContext resolves addr, checks that no returned IP is private or
-// loopback, then dials the first resolved address directly (bypassing DNS a
-// second time) to close the DNS-rebinding window.
-func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return nil, fmt.Errorf("ssrf guard: bad addr %q: %w", addr, err)
-	}
+func (g *ssrfGuard) RoundTrip(req *http.Request) (*http.Response, error) {
+	host := req.URL.Hostname()
 
-	// Literal IP — no DNS lookup needed.
 	if ip := net.ParseIP(host); ip != nil {
 		if isPrivateIP(ip) {
 			return nil, fmt.Errorf("ssrf guard: address %s is a private or loopback IP", ip)
 		}
-		return baseDialer.DialContext(ctx, network, addr)
+		return g.inner.RoundTrip(req)
 	}
 
-	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	addrs, err := net.DefaultResolver.LookupIPAddr(req.Context(), host)
 	if err != nil {
 		return nil, fmt.Errorf("ssrf guard: resolve %q: %w", host, err)
 	}
@@ -92,9 +91,7 @@ func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 		}
 	}
 
-	// Dial to the first resolved IP directly — not the hostname — so a
-	// second DNS lookup (which could return a different address) never happens.
-	return baseDialer.DialContext(ctx, network, net.JoinHostPort(addrs[0].IP.String(), port))
+	return g.inner.RoundTrip(req)
 }
 
 // New returns an *http.Client with retry/backoff, environment proxy
@@ -102,7 +99,7 @@ func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error
 // URLs. timeout bounds each individual attempt; retryMax is the number of
 // retries after the first attempt (negative falls back to 2).
 func New(timeout time.Duration, retryMax int) *http.Client {
-	return build(timeout, retryMax, safeDialContext)
+	return build(timeout, retryMax, true)
 }
 
 // NewInternal returns an *http.Client identical to New but without SSRF
@@ -110,10 +107,10 @@ func New(timeout time.Duration, retryMax int) *http.Client {
 // (e.g. a SearXNG instance the operator deploys) where the target address
 // is not agent-supplied.
 func NewInternal(timeout time.Duration, retryMax int) *http.Client {
-	return build(timeout, retryMax, nil)
+	return build(timeout, retryMax, false)
 }
 
-func build(timeout time.Duration, retryMax int, dialCtx func(context.Context, string, string) (net.Conn, error)) *http.Client {
+func build(timeout time.Duration, retryMax int, ssrf bool) *http.Client {
 	if retryMax < 0 {
 		retryMax = 2
 	}
@@ -126,10 +123,12 @@ func build(timeout time.Duration, retryMax int, dialCtx func(context.Context, st
 
 	transport := rc.HTTPClient.Transport.(*http.Transport).Clone()
 	transport.Proxy = http.ProxyFromEnvironment
-	if dialCtx != nil {
-		transport.DialContext = dialCtx
+
+	var rt http.RoundTripper = transport
+	if ssrf {
+		rt = &ssrfGuard{inner: transport}
 	}
-	rc.HTTPClient.Transport = transport
+	rc.HTTPClient.Transport = rt
 
 	client := rc.StandardClient()
 	// One budget for the whole exchange, retries included — the caller's
