@@ -92,6 +92,13 @@ func New(timeout time.Duration, maxBytes, cacheBudget int64, ttl time.Duration) 
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}
+	return newFetcher(httpclient.New(timeout, 2), maxBytes, cacheBudget, ttl)
+}
+
+// newFetcher is the internal constructor that accepts a pre-built HTTP client.
+// Tests call it directly with a plain client so the SSRF guard does not block
+// loopback httptest addresses.
+func newFetcher(client *http.Client, maxBytes, cacheBudget int64, ttl time.Duration) *Fetcher {
 	if maxBytes <= 0 {
 		maxBytes = DefaultMaxBytes
 	}
@@ -105,7 +112,7 @@ func New(timeout time.Duration, maxBytes, cacheBudget int64, ttl time.Duration) 
 		ttl = cache.DefaultTTL
 	}
 	return &Fetcher{
-		client:      httpclient.New(timeout, 2),
+		client:      client,
 		maxBytes:    maxBytes,
 		cacheBudget: cacheBudget,
 		snapshots:   cache.New[docEntry](cacheBudget, ttl),

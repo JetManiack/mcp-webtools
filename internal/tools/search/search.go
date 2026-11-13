@@ -67,7 +67,7 @@ func New(baseURL string, timeout, ttl time.Duration) *Searcher {
 	}
 	return &Searcher{
 		baseURL: strings.TrimSuffix(baseURL, "/"),
-		client:  httpclient.New(timeout, 2),
+		client:  httpclient.NewInternal(timeout, 2),
 		results: cache.New[[]Result](DefaultResultsCacheBytes, ttl),
 	}
 }

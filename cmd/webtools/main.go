@@ -100,9 +100,8 @@ func newRootCommand() *cli.Command {
 				Sources: cli.EnvVars("HISTORY_RETENTION"),
 			},
 			&cli.BoolFlag{
-				Name:    "auth-stub",
-				Usage:   "use a fixed, always-admin test identity instead of real Keycloak/OIDC auth — local development only, never set this in a real deployment",
-				Sources: cli.EnvVars("AUTH_STUB"),
+				Name:  "auth-stub",
+				Usage: "use a fixed, always-admin test identity instead of real Keycloak/OIDC auth — local development only, never set this in a real deployment",
 			},
 			&cli.StringFlag{
 				Name:    "oidc-issuer",
