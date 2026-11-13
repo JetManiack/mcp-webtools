@@ -3,6 +3,7 @@ package httpclient
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -85,3 +86,81 @@ func TestNoProxyHonoured(t *testing.T) {
 	}
 	resp.Body.Close()
 }
+
+// TestSSRFGuardBlocksLoopback verifies New() rejects requests to 127.x and
+// other loopback targets — these are blocked by the ssrfGuard RoundTripper.
+func TestSSRFGuardBlocksLoopback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := New(5*time.Second, 0)
+	_, err := c.Get(srv.URL) // 127.0.0.1
+	if err == nil {
+		t.Fatal("expected ssrf guard error for loopback, got nil")
+	}
+	if !strings.Contains(err.Error(), "ssrf guard") {
+		t.Errorf("error = %v, want message containing \"ssrf guard\"", err)
+	}
+}
+
+// TestSSRFGuardBlocksPrivateRanges verifies New() rejects bare private/RFC1918 IPs.
+func TestSSRFGuardBlocksPrivateRanges(t *testing.T) {
+	c := New(5*time.Second, 0)
+	for _, addr := range []string{
+		"http://10.0.0.1/",
+		"http://192.168.1.1/",
+		"http://172.16.0.1/",
+		"http://169.254.169.254/latest/meta-data/",
+	} {
+		_, err := c.Get(addr)
+		if err == nil {
+			t.Errorf("Get(%q): expected ssrf guard error, got nil", addr)
+			continue
+		}
+		if !strings.Contains(err.Error(), "ssrf guard") {
+			t.Errorf("Get(%q): error = %v, want ssrf guard", addr, err)
+		}
+	}
+}
+
+// TestSSRFGuardChecksTargetNotProxy verifies that the guard inspects
+// req.URL.Hostname() — the final target — and never the proxy's address.
+// This is the regression test for the DialContext approach (commit 3814332)
+// which broke because DialContext saw the proxy's private ClusterIP instead
+// of the public target. With the RoundTripper approach the guard fires before
+// the transport and sees the target URL directly.
+func TestSSRFGuardChecksTargetNotProxy(t *testing.T) {
+	var innerSaw string
+	inner := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		innerSaw = req.URL.Hostname()
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+	})
+	guard := &ssrfGuard{inner: inner}
+
+	// Public target: guard must pass it through to inner.
+	req, _ := http.NewRequest(http.MethodGet, "http://1.1.1.1/", nil)
+	_, err := guard.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip(public IP): unexpected error: %v", err)
+	}
+	if innerSaw != "1.1.1.1" {
+		t.Errorf("inner saw %q, want 1.1.1.1", innerSaw)
+	}
+
+	// Private target: guard must block it.
+	req, _ = http.NewRequest(http.MethodGet, "http://10.0.0.1/", nil)
+	_, err = guard.RoundTrip(req)
+	if err == nil {
+		t.Fatal("RoundTrip(private IP): expected ssrf guard error, got nil")
+	}
+	if !strings.Contains(err.Error(), "ssrf guard") {
+		t.Errorf("error = %v, want ssrf guard", err)
+	}
+}
+
+// roundTripFunc is an http.RoundTripper backed by a function.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
